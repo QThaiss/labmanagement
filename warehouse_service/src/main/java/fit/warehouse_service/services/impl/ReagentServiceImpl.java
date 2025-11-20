@@ -1,0 +1,92 @@
+package fit.warehouse_service.services.impl;
+
+import fit.warehouse_service.dtos.request.ReagentDeductionRequest;
+import fit.warehouse_service.dtos.response.ApiResponse;
+import fit.warehouse_service.dtos.response.ReagentDeductionResponse;
+import fit.warehouse_service.entities.ReagentLot;
+import fit.warehouse_service.entities.ReagentUsageHistory;
+import fit.warehouse_service.enums.WarehouseActionType;
+import fit.warehouse_service.repositories.ReagentLotRepository;
+import fit.warehouse_service.repositories.ReagentUsageHistoryRepository;
+import fit.warehouse_service.services.ReagentService;
+import fit.warehouse_service.services.WarehouseEventLogService;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.time.LocalDate;
+import java.util.List;
+
+@Service
+@RequiredArgsConstructor
+@Slf4j
+public class ReagentServiceImpl implements ReagentService {
+
+    private final ReagentLotRepository reagentLotRepository;
+    private final ReagentUsageHistoryRepository usageHistoryRepository;
+    private final WarehouseEventLogService logService;
+
+    @Override
+    @Transactional
+    public ApiResponse<ReagentDeductionResponse> checkAndDeductReagent(ReagentDeductionRequest request) {
+        log.info("Processing reagent deduction for Order {}: {} ({} ml)",
+                request.getOrderId(), request.getReagentName(), request.getRequiredVolume());
+
+        // 1. Tìm các lô hàng phù hợp (FEFO)
+        List<ReagentLot> availableLots = reagentLotRepository.findAvailableLotsByName(
+                request.getReagentName(), LocalDate.now());
+
+        if (availableLots.isEmpty()) {
+            return ApiResponse.success(ReagentDeductionResponse.builder()
+                    .deductionSuccessful(false)
+                    .message("No available lots found for reagent: " + request.getReagentName())
+                    .deductedVolume(0)
+                    .build(), "Failed");
+        }
+
+        // 2. Tính tổng lượng tồn
+        double totalAvailable = availableLots.stream().mapToDouble(ReagentLot::getCurrentQuantity).sum();
+        if (totalAvailable < request.getRequiredVolume()) {
+            return ApiResponse.success(ReagentDeductionResponse.builder()
+                    .deductionSuccessful(false)
+                    .message("Insufficient volume. Required: " + request.getRequiredVolume() + ", Available: " + totalAvailable)
+                    .deductedVolume(0)
+                    .build(), "Failed");
+        }
+
+        // 3. Thực hiện trừ dần
+        double remainingNeeded = request.getRequiredVolume();
+        double totalDeducted = 0;
+
+        for (ReagentLot lot : availableLots) {
+            if (remainingNeeded <= 0) break;
+
+            double deductAmount = Math.min(lot.getCurrentQuantity(), remainingNeeded);
+
+            // Cập nhật Lot
+            lot.setCurrentQuantity(lot.getCurrentQuantity() - deductAmount);
+            reagentLotRepository.save(lot);
+
+            // Ghi Log Usage
+            ReagentUsageHistory usage = new ReagentUsageHistory();
+            usage.setReagentLot(lot);
+            usage.setQuantityUsed(deductAmount);
+            usage.setAction("ORDER_DEDUCTION");
+            usageHistoryRepository.save(usage);
+
+            // Ghi Event Log
+            logService.logEvent(WarehouseActionType.REAGENT_USED, lot.getId(), "ReagentLot",
+                    "Deducted " + deductAmount + " for Order " + request.getOrderId());
+
+            remainingNeeded -= deductAmount;
+            totalDeducted += deductAmount;
+        }
+
+        return ApiResponse.success(ReagentDeductionResponse.builder()
+                .deductionSuccessful(true)
+                .message("Deducted successfully")
+                .deductedVolume(totalDeducted)
+                .build(), "Success");
+    }
+}
