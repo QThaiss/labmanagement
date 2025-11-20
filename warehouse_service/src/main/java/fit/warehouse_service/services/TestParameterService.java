@@ -79,5 +79,14 @@ public interface TestParameterService {
      */
     PageResponse<TestParameterResponse> getAllTestParameters(int page, int size, String[] sort, String search, LocalDate startDate, LocalDate endDate);
 
+    /**
+     * Lấy thông tin một TestParameter theo testParameterId
+     *
+     * @param testParameterId id của TestParameter cần lấy
+     *
+     * @return TestParameterResponse chứa thông tin của TestParameter
+     */
+    TestParameterResponse getTestParameterByTestParameterId(String testParameterId);
+
     boolean validateTestParametersExist(List<String> ids);
 }

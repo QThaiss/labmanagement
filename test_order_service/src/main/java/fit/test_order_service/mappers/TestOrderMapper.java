@@ -5,7 +5,10 @@ import fit.test_order_service.dtos.response.*;
 import fit.test_order_service.entities.OrderComment;
 import fit.test_order_service.entities.TestOrder;
 import fit.test_order_service.entities.TestResult;
+import fit.test_order_service.enums.CommentTargetType;
+import fit.test_order_service.repositories.OrderCommentRepository;
 import fit.test_order_service.utils.DateUtils;
+import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
 import java.time.LocalDate;
@@ -15,7 +18,9 @@ import java.util.List;
 import java.util.stream.Collectors;
 
 @Component
+@RequiredArgsConstructor
 public class TestOrderMapper {
+    private final OrderCommentRepository orderCommentRepository;
     /**
      * Chuyển đổi từ PatientMedicalRecordInternalResponse DTO (nhận từ patient-service) sang TestOrder entity.
      * Bao gồm cả logic tính tuổi.
@@ -51,18 +56,26 @@ public class TestOrderMapper {
      * @param testOrder The TestOrder entity to convert.
      * @return A TestOrderResponse DTO.
      */
-    public TestOrderResponse toResponse(TestOrder testOrder) {
+    public TestOrderResponse toResponse(TestOrder testOrder, TestTypeResponse testTypeResponse) {
         if (testOrder == null) {
             return null;
         }
+
+        List<OrderComment> comments = orderCommentRepository
+                .findByTargetTypeAndTargetIdAndDeletedAtIsNullOrderByCreatedAtAsc(
+                        CommentTargetType.ORDER,
+                        testOrder.getOrderId()
+                );
+
+        List<OrderCommentResponse> commentResponses = this.toCommentResponseList(comments);
 
         return TestOrderResponse.builder()
                 .id(testOrder.getOrderId())
                 .orderCode(testOrder.getOrderCode())
                 .barcode(testOrder.getBarcode())
+                .testType(testTypeResponse)
                 .medicalRecordId(testOrder.getMedicalRecordId())
                 .medicalRecordCode(testOrder.getMedicalRecordCode())
-                .testTypeId(testOrder.getTestTypeIdSnapshot())
                 .fullName(testOrder.getFullName())
                 .age(testOrder.getAgeYearsSnapshot())
                 .gender(testOrder.getGender())
@@ -83,6 +96,8 @@ public class TestOrderMapper {
                 .reviewedBy(testOrder.getReviewedBy())
                 .deletedAt(DateUtils.toVietnamTime(testOrder.getDeletedAt()))
                 .deletedBy(testOrder.getDeletedBy())
+                .results(toResultResponseList(testOrder.getResults()))
+                .comments(commentResponses)
                 .build();
     }
 

@@ -7,4 +7,6 @@ import fit.warehouse_service.dtos.response.ReagentDeductionResponse;
 
 public interface ReagentService {
     ApiResponse<ReagentDeductionResponse> checkAndDeductReagent(ReagentDeductionRequest request);
+
+    boolean checkReagentAvailability(String reagentName, Double requiredVolume);
 }

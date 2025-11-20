@@ -52,6 +52,13 @@ public class TestParameterController {
         return ResponseEntity.ok(ApiResponse.success(response, "Test parameter retrieved successfully"));}
 
     @PreAuthorize("hasAnyRole('ADMIN','MANAGER')")
+    @GetMapping("/{testParameterId}")
+    public ResponseEntity<ApiResponse<TestParameterResponse>> getTestParameterByTestParameterId(
+            @PathVariable String testParameterId) {
+        TestParameterResponse response = testParameterService.getTestParameterByTestParameterId(testParameterId);
+        return ResponseEntity.ok(ApiResponse.success(response, "Test parameter retrieved successfully"));}
+
+    @PreAuthorize("hasAnyRole('ADMIN','MANAGER')")
     @PutMapping("/{testParameterId}")
     public ResponseEntity<ApiResponse<TestParameterResponse>> updateTestParameter(
             @PathVariable String testParameterId,

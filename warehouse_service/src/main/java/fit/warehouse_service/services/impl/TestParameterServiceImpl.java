@@ -252,6 +252,17 @@ public class TestParameterServiceImpl implements TestParameterService {
 
         return pageResponse;
     }
+
+    @Override
+    public TestParameterResponse getTestParameterByTestParameterId(String testParameterId) {
+        log.info("Getting test parameter by ID: {}", testParameterId);
+
+        TestParameter testParameter = testParameterRepository.findById(testParameterId)
+                .orElseThrow(() -> new NotFoundException("Test parameter not found with ID: " + testParameterId));
+
+        return testParameterMapper.mapToResponse(testParameter);
+    }
+
     @Override
     public boolean validateTestParametersExist(List<String> ids) {
         if (ids == null || ids.isEmpty()) return true;

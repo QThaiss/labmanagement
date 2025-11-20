@@ -22,7 +22,7 @@ public class TestOrderResponse {
     private String barcode;
     String medicalRecordId;
     String medicalRecordCode;
-    String testTypeId;
+    TestTypeResponse testType;
 
     String fullName;
     private Integer age;
@@ -49,4 +49,7 @@ public class TestOrderResponse {
 
     private LocalDateTime deletedAt;
     private String deletedBy;
+
+    private List<TestResultResponse> results;
+    private List<OrderCommentResponse> comments;
 }

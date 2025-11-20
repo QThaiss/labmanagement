@@ -3,9 +3,11 @@ package fit.warehouse_service.services.impl;
 import fit.warehouse_service.dtos.request.ReagentDeductionRequest;
 import fit.warehouse_service.dtos.response.ApiResponse;
 import fit.warehouse_service.dtos.response.ReagentDeductionResponse;
+import fit.warehouse_service.dtos.response.ReagentUsageLimit;
 import fit.warehouse_service.entities.ReagentLot;
 import fit.warehouse_service.entities.ReagentUsageHistory;
 import fit.warehouse_service.enums.WarehouseActionType;
+import fit.warehouse_service.exceptions.BadRequestException;
 import fit.warehouse_service.repositories.ReagentLotRepository;
 import fit.warehouse_service.repositories.ReagentUsageHistoryRepository;
 import fit.warehouse_service.services.ReagentService;
@@ -17,6 +19,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Map;
 
 @Service
 @RequiredArgsConstructor
@@ -26,6 +29,14 @@ public class ReagentServiceImpl implements ReagentService {
     private final ReagentLotRepository reagentLotRepository;
     private final ReagentUsageHistoryRepository usageHistoryRepository;
     private final WarehouseEventLogService logService;
+
+    private static final Map<String, ReagentUsageLimit> USAGE_LIMITS = Map.of(
+            "Diluent", new ReagentUsageLimit(1.0, 2.0),        // ml
+            "Lysing", new ReagentUsageLimit(50.0, 200.0),      // µL
+            "Staining", new ReagentUsageLimit(50.0, 200.0),    // µL
+            "Clotting", new ReagentUsageLimit(50.0, 100.0),    // µL
+            "Cleaner", new ReagentUsageLimit(1.0, 2.0)         // ml
+    );
 
     @Override
     @Transactional
@@ -88,5 +99,49 @@ public class ReagentServiceImpl implements ReagentService {
                 .message("Deducted successfully")
                 .deductedVolume(totalDeducted)
                 .build(), "Success");
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public boolean checkReagentAvailability(String reagentName, Double requiredVolume) {
+        log.info("Checking availability for reagent: {} with required volume: {}", reagentName, requiredVolume);
+
+        // Find available lots using FEFO
+        List<ReagentLot> availableLots = reagentLotRepository.findAvailableLotsByName(
+                reagentName, LocalDate.now());
+
+        if (availableLots.isEmpty()) {
+            log.warn("No available lots found for reagent: {}", reagentName);
+            return false;
+        }
+
+        validateRequiredVolume(reagentName, requiredVolume);
+
+        // Calculate total available quantity
+        double totalAvailable = availableLots.stream()
+                .mapToDouble(ReagentLot::getCurrentQuantity)
+                .sum();
+
+        boolean isAvailable = totalAvailable >= requiredVolume;
+
+        log.info("Availability check result for {}: {} - Required: {}, Available: {}",
+                reagentName, isAvailable, requiredVolume, totalAvailable);
+
+        return isAvailable;
+    }
+
+    private void validateRequiredVolume(String reagentName, Double requiredVolume) {
+        if (!USAGE_LIMITS.containsKey(reagentName)) {
+            throw new BadRequestException("Unknown reagent: " + reagentName);
+        }
+
+        ReagentUsageLimit limit = USAGE_LIMITS.get(reagentName);
+
+        if (requiredVolume < limit.getMin() || requiredVolume > limit.getMax()) {
+            throw new BadRequestException(
+                    "Required volume for reagent '" + reagentName + "' must be between " +
+                            limit.getMin() + " and " + limit.getMax()
+            );
+        }
     }
 }

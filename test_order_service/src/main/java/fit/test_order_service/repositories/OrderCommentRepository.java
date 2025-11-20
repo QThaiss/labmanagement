@@ -38,4 +38,9 @@ public interface OrderCommentRepository extends JpaRepository<OrderComment, Stri
      * Tìm các comment cấp cao nhất (parentId = null) cho một danh sách các targetId.
      */
     List<OrderComment> findByTargetTypeAndTargetIdInAndParentIdIsNullOrderByCreatedAtAsc(CommentTargetType targetType, List<String> targetIds);
+
+    List<OrderComment> findByTargetTypeAndTargetIdAndDeletedAtIsNullOrderByCreatedAtAsc(
+            CommentTargetType targetType,
+            String targetId
+    );
 }

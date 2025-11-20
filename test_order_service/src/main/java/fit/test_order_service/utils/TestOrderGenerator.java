@@ -63,4 +63,12 @@ public class TestOrderGenerator {
         }
         return sb.toString();
     }
+
+    public String generateTestTypeId() {
+        String datePart = LocalDateTime.now(ZoneId.of("Asia/Ho_Chi_Minh"))
+                .format(DateTimeFormatter.ofPattern("yyMMddHHmmss"));
+        String uuidSuffix = UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+        int number = RANDOM.nextInt(9000) + 1000; // 1000-9999
+        return String.format("TTID-%s-%s-%d", datePart, uuidSuffix, number);
+    }
 }

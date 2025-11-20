@@ -65,6 +65,14 @@ public class TestOrderController {
         return new ResponseEntity<>(apiResponse, HttpStatus.OK);
     }
 
+    @GetMapping("/{testOrderById}/full")
+    @PreAuthorize("hasAnyRole('ADMIN','MANAGER')")
+    public ResponseEntity<ApiResponse<TestOrderResponse>> getTestOrderByTestOrderId(@PathVariable String testOrderById) {
+        TestOrderResponse response = testOrderService.getTestOrderByTestOrderId(testOrderById);
+
+        return ResponseEntity.ok(ApiResponse.success(response, "Test order retrieved successfully"));
+    }
+
     @DeleteMapping("/{id}")
     @PreAuthorize("hasAnyRole('ADMIN','MANAGER')")
     public ResponseEntity<ApiResponse<Void>> deleteTestOrder(@PathVariable String id) {

@@ -26,6 +26,8 @@ public interface TestOrderService {
 
     TestOrderDetailResponse getTestOrderById(String id);
 
+    TestOrderResponse getTestOrderByTestOrderId(String id);
+
     void deleteTestOrder(String id);
 
     TestOrderResponse updateTestOrderByCode(String orderCode, UpdateTestOrderRequest request);

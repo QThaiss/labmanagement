@@ -37,19 +37,10 @@ public class InternalTestOrderController {
      * Dùng để instrument_service kiểm tra xem TestOrder có tồn tại không.
      */
     @GetMapping("/{id}")
-    public ResponseEntity<ApiResponse<Map<String, Object>>> getTestOrderById(@PathVariable("id") String id) {
+    public ResponseEntity<ApiResponse<TestOrderResponse>> getTestOrderById(@PathVariable("id") String id) {
+        TestOrderResponse order = testOrderService.getTestOrderByTestOrderId(id);
 
-        // Chỉ cần gọi service. Nếu không tìm thấy, service sẽ ném NotFoundException
-        // và GlobalExceptionHandler sẽ tự động trả về 404.
-        TestOrderDetailResponse order = testOrderService.getTestOrderById(id);
-
-        // Nếu tìm thấy, trả về một Map đơn giản xác nhận sự tồn tại
-        Map<String, Object> data = Map.of(
-                "orderId", order.getId(),
-                "status", order.getStatus()
-        );
-
-        return ResponseEntity.ok(ApiResponse.success(data, "Test order exists."));
+        return ResponseEntity.ok(ApiResponse.success(order, "Test order retrieved successfully"));
     }
 
     /**
