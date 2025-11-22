@@ -8,6 +8,7 @@ package fit.test_order_service.services.impl;
 
 import ca.uhn.hl7v2.HL7Exception;
 import ca.uhn.hl7v2.model.Message;
+import ca.uhn.hl7v2.model.v25.datatype.ST;
 import ca.uhn.hl7v2.parser.Parser;
 import fit.test_order_service.dtos.response.Hl7Metadata;
 import fit.test_order_service.dtos.response.ParsedTestResult;
@@ -33,6 +34,8 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+
+import static java.lang.Double.parseDouble;
 
 /*
  * @description: Implement of Hl7ParserService to parse HL7 messages.
@@ -159,8 +162,11 @@ public class Hl7ParserServiceImpl implements Hl7ParserService {
             // Lấy OBR (Order) segment để lấy thông tin test order
             OBR obr = orderObs.getOBR();
 
-            // Lấy Order ID từ OBR segment
-            String orderId = obr.getFillerOrderNumber().getEntityIdentifier().getValue();
+            // Lấy Order ID ưu tiên từ Placer Order Number (OBR-2), fallback sang Filler Order Number (OBR-3)
+            String orderId = obr.getPlacerOrderNumber().getEntityIdentifier().getValue();
+            if (orderId == null || orderId.isBlank()) {
+                orderId = obr.getFillerOrderNumber().getEntityIdentifier().getValue();
+            }
 
             // Lấy số lượng OBSERVATION trong ORDER_OBSERVATION
             int observationReps = orderObs.getOBSERVATIONReps();
@@ -205,7 +211,13 @@ public class Hl7ParserServiceImpl implements Hl7ParserService {
             // Trích xuất đơn vị đo
             String unit = "";
             if (obx.getUnits() != null) {
-                unit = obx.getUnits().getIdentifier().getValue();
+                ST identifier = obx.getUnits().getIdentifier();
+                ST text = obx.getUnits().getText();
+                if (identifier != null && identifier.getValue() != null && !identifier.getValue().isBlank()) {
+                    unit = identifier.getValue();
+                } else if (text != null) {
+                    unit = text.getValue();
+                }
             }
 
             // Trích xuất khoảng tham chiếu
@@ -220,8 +232,8 @@ public class Hl7ParserServiceImpl implements Hl7ParserService {
                 abnormalFlagStr = obx.getAbnormalFlags()[0].getValue();
             }
 
-            // Phân tích cờ bất thường
-            AbnormalFlag abnormalFlag = parseAbnormalFlag(abnormalFlagStr);
+            // Phân tích cờ bất thường từ HL7 hoặc dựa trên khoảng tham chiếu
+            AbnormalFlag abnormalFlag = evaluateAbnormalFlag(valueText, referenceRange, abnormalFlagStr);
 
             // Trích xuất thời gian đo lường
             LocalDateTime measuredAt = parseTimestamp(obx.getDateTimeOfTheObservation());
@@ -261,6 +273,35 @@ public class Hl7ParserServiceImpl implements Hl7ParserService {
         }
     }
 
+    // Phân tích cờ bất thường từ HL7 và/hoặc tính toán dựa trên khoảng tham chiếu
+    private AbnormalFlag evaluateAbnormalFlag(String valueText, String referenceRange, String flagStr) {
+        AbnormalFlag flagFromHl7 = parseAbnormalFlag(flagStr);
+        if (flagFromHl7 != null) {
+            return flagFromHl7;
+        }
+
+        Double value = parseDouble(valueText);
+        if (value == null) {
+            return null;
+        }
+
+        double[] range = parseReferenceRange(referenceRange);
+        if (range == null) {
+            return null;
+        }
+
+        double lower = range[0];
+        double upper = range[1];
+
+        if (value < lower) {
+            return AbnormalFlag.L;
+        }
+        if (value > upper) {
+            return AbnormalFlag.H;
+        }
+        return AbnormalFlag.N;
+    }
+
     // Phân tích cờ bất thường từ chuỗi ký tự
     private AbnormalFlag parseAbnormalFlag(String flagStr) {
         // Kiểm tra null hoặc chuỗi rỗng
@@ -269,13 +310,44 @@ public class Hl7ParserServiceImpl implements Hl7ParserService {
         }
 
         // Chuyển đổi chuỗi ký tự thành enum AbnormalFlag
-        switch (flagStr.toUpperCase()) {
-            case "H": return AbnormalFlag.H;
-            case "L": return AbnormalFlag.L;
-            case "N": return AbnormalFlag.N;
-            case "A": return AbnormalFlag.A;
-            default: return null;
+        return switch (flagStr.toUpperCase()) {
+            case "H" -> AbnormalFlag.H;
+            case "L" -> AbnormalFlag.L;
+            case "N" -> AbnormalFlag.N;
+            case "A" -> AbnormalFlag.A;
+            default -> null;
+        };
+    }
+
+    private Double parseDouble(String valueText) {
+        if (valueText == null || valueText.isBlank()) {
+            return null;
         }
+        try {
+            return Double.parseDouble(valueText.trim());
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    private double[] parseReferenceRange(String referenceRange) {
+        if (referenceRange == null || referenceRange.isBlank()) {
+            return null;
+        }
+
+        String[] parts = referenceRange.split("-");
+        if (parts.length != 2) {
+            return null;
+        }
+
+        Double lower = parseDouble(parts[0]);
+        Double upper = parseDouble(parts[1]);
+
+        if (lower == null || upper == null) {
+            return null;
+        }
+
+        return new double[]{lower, upper};
     }
 
     private String normalizeTestCode(String rawTestCode, String analyteName) {

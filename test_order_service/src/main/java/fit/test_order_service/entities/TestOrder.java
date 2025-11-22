@@ -43,21 +43,21 @@ public class TestOrder {
     private String orderCode;
 
     // refs qua service khác
-    @NotBlank
+//    @NotBlank
     @Column(name = "medical_record_id", length = 40)
     private String medicalRecordId;
 
-    @NotBlank
-    @Column(name = "medical_record_code", nullable = false, length = 50)
+//    @NotBlank
+    @Column(name = "medical_record_code", length = 50)
     private String medicalRecordCode;
 
     // snapshot
-    @NotBlank
-    @Column(name = "full_name", nullable = false, length = 150)
+//    @NotBlank
+    @Column(name = "full_name", length = 150)
     private String fullName;
 
-    @NotNull
-    @Column(name = "date_of_birth", columnDefinition = "date", nullable = false)
+//    @NotNull
+    @Column(name = "date_of_birth", columnDefinition = "date")
     private LocalDate dateOfBirth;
 
     @Column(name = "barcode", unique = true)
@@ -67,26 +67,26 @@ public class TestOrder {
     @Column(name = "entry_source")
     private EntrySource entrySource;
 
-    @NotNull
-    @Min(0)
-    @Max(127)
-    @Column(name = "age_years_snapshot", columnDefinition = "tinyint unsigned", nullable = false)
+//    @NotNull
+//    @Min(0)
+//    @Max(127)
+    @Column(name = "age_years_snapshot", columnDefinition = "tinyint unsigned")
     private Integer ageYearsSnapshot;
 
-    @NotNull
+//    @NotNull
     @Enumerated(EnumType.STRING)
-    @Column(name = "gender", length = 16, nullable = false)
+    @Column(name = "gender", length = 16)
     private Gender gender;
 
-    @NotBlank
+//    @NotBlank
     @Size(max = 20)
-    @Column(name = "phone", length = 20, nullable = false)
+    @Column(name = "phone", length = 20)
     private String phone;
 
-    @NotBlank
+//    @NotBlank
     @Email
     @Size(max = 128)
-    @Column(name = "email", length = 128, nullable = false)
+    @Column(name = "email", length = 128)
     private String email;
 
     @Size(max = 255)
@@ -98,6 +98,12 @@ public class TestOrder {
     @Enumerated(EnumType.STRING)
     @Column(name = "status", length = 16, nullable = false)
     private OrderStatus status;
+
+    @Column(name = "auto_created", nullable = false)
+    private boolean autoCreated = false;
+
+    @Column(name = "requires_patient_match", nullable = false)
+    private boolean requiresPatientMatch = false;
 
     @Column(name = "created_at", columnDefinition = "datetime(6)", nullable = false, updatable = false)
     private LocalDateTime createdAt;
@@ -166,17 +172,17 @@ public class TestOrder {
     private List<ReportJob> relatedPrintJobs;
 
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "test_type_id", nullable = false)
+    @JoinColumn(name = "test_type_id")
     private TestType testTypeRef;
 
-    @NotBlank
+//    @NotBlank
     @Size(max = 36)
-    @Column(name = "test_type_id_snapshot", length = 36, nullable = false)
+    @Column(name = "test_type_id_snapshot", length = 36)
     private String testTypeIdSnapshot;
 
-    @NotBlank
+//    @NotBlank
     @Size(max = 100)
-    @Column(name = "test_type_name_snapshot", length = 100, nullable = false)
+    @Column(name = "test_type_name_snapshot", length = 100)
     private String testTypeNameSnapshot;
 
     @PrePersist

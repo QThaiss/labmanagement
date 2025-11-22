@@ -129,10 +129,5 @@ public class FlaggingServiceImpl implements FlaggingService {
                 .build();
 
         flaggingAppliedRepository.save(flagging);
-
-        // Cập nhật flag trực tiếp lên TestResult (để hiển thị nhanh)
-        result.setFlagCode(rule.getFlagCode());
-        result.setFlagSeverity(rule.getSeverity());
-        result.setAppliedRuleVersion(ruleVersion);
     }
 }

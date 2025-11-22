@@ -36,6 +36,7 @@ import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -316,6 +317,8 @@ public class TestOrderServiceImpl implements TestOrderService {
         // Validate and fetch existing order
         TestOrder existingOrder = testOrderValidator.validateForUpdate(orderCode);
 
+        boolean isAutoCreated = existingOrder.isAutoCreated();
+
         // Clone before update (snapshot)
         TestOrder beforeUpdate = new TestOrder();
         BeanUtils.copyProperties(existingOrder, beforeUpdate);
@@ -370,11 +373,61 @@ public class TestOrderServiceImpl implements TestOrderService {
             }
         }
 
-        TestTypeResponse testTypeResponse = testTypeService.getTestTypeById(existingOrder.getTestTypeRef().getId());
+        if (StringUtils.hasText(request.getTestTypeId())) {
+
+            TestType testType = testTypeRepository.findById(request.getTestTypeId())
+                    .orElseThrow(() -> new NotFoundException("TestType not found with ID: " + request.getTestTypeId()));
+
+            if (existingOrder.getTestTypeRef() == null ||
+                    !Objects.equals(existingOrder.getTestTypeRef().getId(), testType.getId())) {
+
+                existingOrder.setTestTypeRef(testType);
+                existingOrder.setTestTypeIdSnapshot(testType.getId());
+                existingOrder.setTestTypeNameSnapshot(testType.getName());
+                hasChanges = true;
+            }
+        }
+
+        if (StringUtils.hasText(request.getMedicalRecordCode())) {
+
+            if (!isAutoCreated) {
+                throw new BadRequestException("Cannot update medical record for a non-auto-created test order.");
+            }
+
+            if (!request.getMedicalRecordCode().equals(existingOrder.getMedicalRecordCode())) {
+
+                ApiResponse<PatientMedicalRecordInternalResponse> patient =
+                        patientMedicalRecordFeignClient.getPatientMedicalRecordByCode(request.getMedicalRecordCode());
+
+                PatientMedicalRecordInternalResponse p = patient.getData();
+
+                existingOrder.setMedicalRecordCode(p.medicalRecordCode());
+                existingOrder.setMedicalRecordId(p.medicalRecordId());
+                existingOrder.setFullName(p.fullName());
+                existingOrder.setGender(p.gender());
+                existingOrder.setDateOfBirth(p.dateOfBirth().toLocalDate());
+                existingOrder.setAgeYearsSnapshot(calculateAge(p.dateOfBirth().toLocalDate()));
+                existingOrder.setPhone(p.phone());
+                existingOrder.setEmail(p.email());
+                existingOrder.setAddress(p.address());
+
+                hasChanges = true;
+            }
+        }
+
+        if (isAutoCreated && hasChanges) {
+            existingOrder.setAutoCreated(false);
+            existingOrder.setRequiresPatientMatch(false);
+
+            if (existingOrder.getStatus() == OrderStatus.AUTO_CREATED) {
+                existingOrder.setStatus(OrderStatus.COMPLETED);
+            }
+        }
+
 
         if (!hasChanges) {
             log.info("No changes detected for test order: {}", orderCode);
-            return testOrderMapper.toResponse(existingOrder, testTypeResponse);
+            return testOrderMapper.toResponse(existingOrder, testTypeService.getTestTypeById(existingOrder.getTestTypeRef().getId()));
         }
 
         // Get current user ID
@@ -394,7 +447,8 @@ public class TestOrderServiceImpl implements TestOrderService {
 
         log.info("Test order {} updated successfully.", orderCode);
 
-        return testOrderMapper.toResponse(updatedOrder, testTypeResponse);
+        return testOrderMapper.toResponse(updatedOrder, existingOrder.getTestTypeRef() != null ?
+                testTypeService.getTestTypeById(existingOrder.getTestTypeRef().getId()) : null);
     }
 
     // Helper calculate age
@@ -843,5 +897,64 @@ public class TestOrderServiceImpl implements TestOrderService {
                 "Shell test order auto-created from instrument for barcode: " + barcode);
 
         return testOrderMapper.toResponse(savedTestOrder, testTypeResponse);
+    }
+
+    @Override
+    @Transactional
+    public TestOrderResponse autoCreateTestOrder(AutoCreateTestOrderRequest request) {
+        log.info("[AUTO-CREATE] Creating test order for barcode: {}", request.getBarcode());
+
+        if (!StringUtils.hasText(request.getBarcode())) {
+            throw new BadRequestException("Barcode is required for auto-create.");
+        }
+
+        // Kiểm tra nếu đã tồn tại đơn với barcode này chưa
+        Optional<TestOrder> existing = testOrderRepository.findByBarcode(request.getBarcode());
+        if (existing.isPresent()) {
+            log.warn("[AUTO-CREATE] Test order already exists for barcode {}. Returning existing.", request.getBarcode());
+            // Chưa có TestTypeSnapshot nên truyền null
+            return testOrderMapper.toResponse(existing.get(), null);
+        }
+
+        // Tạo entity mới
+        TestOrder testOrder = new TestOrder();
+
+        // Tạo id và code cho đơn
+        testOrder.setOrderId(TestOrderGenerator.generateTestOrderId());
+
+        testOrder.setOrderCode(TestOrderGenerator.generateTestOrderCode());
+
+        // Barcode này là barcode từ ống mẫu (sample)
+        testOrder.setBarcode(request.getBarcode());
+        testOrder.setReviewMode(ReviewMode.HUMAN);
+        testOrder.setReviewStatus(ReviewStatus.NONE);
+
+        // Trạng thái đặc biệt cho đơn auto-created
+        testOrder.setStatus(OrderStatus.AUTO_CREATED);
+        testOrder.setAutoCreated(true);
+        testOrder.setRequiresPatientMatch(true);
+
+        testOrder.setCreatedAt(LocalDateTime.now(ZoneOffset.UTC));
+
+        // Vì là tạo từ Instrument, không có user login
+        testOrder.setCreatedBy("INSTRUMENT_SERVICE");
+
+        // Không set:
+        // - testType
+        // - medicalRecordCode
+        // - patient info
+        // Các thông tin này sẽ được người dùng cập nhật sau trên LIS.
+
+        TestOrder saved = testOrderRepository.save(testOrder);
+
+        // Log event
+        orderEventLogService.logEvent(
+                saved,
+                EventType.CREATE,
+                "Auto-created from Instrument for barcode: " + saved.getBarcode()
+        );
+
+        // Trả về response. Không có TestType kèm theo nên truyền null
+        return testOrderMapper.toResponse(saved, null);
     }
 }

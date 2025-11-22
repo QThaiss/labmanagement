@@ -21,5 +21,5 @@ public class SortFields {
     public static final Set<String> PATIENT_MEDICAL_RECORD_SORT_FIELDS =
             Set.of("createdAt", "fullName", "dateOfBirth", "lastTestDate");
 
-    public static final String DEFAULT_PATIENT_MEDICAL_RECORD_SORT = "medicalRecordId";
+    public static final String DEFAULT_PATIENT_MEDICAL_RECORD_SORT = "createdAt";
 }

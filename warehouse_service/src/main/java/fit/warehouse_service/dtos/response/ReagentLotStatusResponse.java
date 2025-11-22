@@ -10,4 +10,5 @@ import lombok.NoArgsConstructor;
 public class ReagentLotStatusResponse {
     private String reagentLotId;    // ID của Lô (ví dụ: RLO-xxx)
     private double currentQuantity; // Số lượng tồn kho hiện tại
+    private String usagePerRun;     // Mức sử dụng hóa chất cho mỗi lần chạy
 }

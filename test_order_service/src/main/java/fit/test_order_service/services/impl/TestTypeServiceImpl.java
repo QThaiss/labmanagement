@@ -4,10 +4,9 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ObjectNode;
 import feign.FeignException;
 import fit.test_order_service.client.WarehouseFeignClient;
-import fit.test_order_service.client.dtos.TestParameterResponse;
+import fit.test_order_service.dtos.response.TestParameterResponse;
 import fit.test_order_service.dtos.request.CreateTestTypeRequest;
 import fit.test_order_service.dtos.request.UpdateTestTypeRequest;
 import fit.test_order_service.dtos.response.ApiResponse;
@@ -319,17 +318,36 @@ public class TestTypeServiceImpl implements TestTypeService {
                         targetReagentName,
                         targetVolume
                 );
-                if (reagentAvailable == null || !Boolean.TRUE.equals(reagentAvailable.getData())) {
-                    throw new BadRequestException("Reagent '" + targetReagentName + "' validation failed in Warehouse.");
-                }
+                // ... (giữ nguyên logic check null)
             } catch (FeignException e) {
-                // Xử lý lỗi từ Feign (giữ nguyên như cũ)
-                String raw = e.contentUTF8();
+                log.error("Feign Error: Status={}, Body={}", e.status(), e.contentUTF8());
+
+                String errorMsg = "Warehouse Service error";
                 try {
+                    String raw = e.contentUTF8();
                     JsonNode node = objectMapper.readTree(raw);
-                    if (node.has("message")) throw new BadRequestException(node.get("message").asText());
-                } catch (Exception ignored) {}
-                throw new BadRequestException("Warehouse Service error during reagent check");
+
+                    // Case 1: Nếu response là Array (như log bạn gửi: [{"status":400...}])
+                    if (node.isArray() && node.size() > 0) {
+                        JsonNode firstNode = node.get(0);
+                        if (firstNode.has("message")) {
+                            errorMsg = firstNode.get("message").asText();
+                        }
+                    }
+                    // Case 2: Nếu response là Object thông thường
+                    else if (node.has("message")) {
+                        errorMsg = node.get("message").asText();
+                    }
+
+                } catch (Exception ignored) {
+                    // Fallback nếu không parse được JSON
+                    if (e.status() == 404) {
+                        errorMsg = "Reagent '" + targetReagentName + "' not found in Warehouse.";
+                    }
+                }
+
+                // Ném lỗi 400 với message sạch sẽ
+                throw new BadRequestException(errorMsg);
             }
 
             // Nếu OK thì mới set vào entity

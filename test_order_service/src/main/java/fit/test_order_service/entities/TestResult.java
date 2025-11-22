@@ -29,8 +29,8 @@ import java.util.UUID;
         @Index(name = "idx_result_order", columnList = "order_id"),
         @Index(name = "idx_result_analyte", columnList = "analyte_name"),
         @Index(name = "idx_result_test_code", columnList = "test_code"),
-        @Index(name = "idx_result_flag", columnList = "flag_code, flag_severity"),
-        @Index(name = "idx_result_rule_ver", columnList = "applied_rule_version")
+//        @Index(name = "idx_result_flag", columnList = "flag_code, flag_severity"),
+//        @Index(name = "idx_result_rule_ver", columnList = "applied_rule_version")
 })
 @Getter
 @Setter
@@ -89,20 +89,20 @@ public class TestResult {
     @Column(name = "source_msg_id", length = 64)
     private String sourceMsgId;
 
-    @Column(name = "applied_rule_version")
-    private Integer appliedRuleVersion;
+//    @Column(name = "applied_rule_version")
+//    private Integer appliedRuleVersion;
 
-    @Size(max = 32)
-    @Column(name = "flag_code", length = 32)
-    private String flagCode;
+//    @Size(max = 32)
+//    @Column(name = "flag_code", length = 32)
+//    private String flagCode;
 
-    @Enumerated(EnumType.STRING)
-    @Column(name = "flag_severity", length = 16)
-    private FlagSeverity flagSeverity;
+//    @Enumerated(EnumType.STRING)
+//    @Column(name = "flag_severity", length = 16)
+//    private FlagSeverity flagSeverity;
 
-    @JdbcTypeCode(SqlTypes.JSON)
-    @Column(name = "meta_json", columnDefinition = "json")
-    private String metaJson;
+//    @JdbcTypeCode(SqlTypes.JSON)
+//    @Column(name = "meta_json", columnDefinition = "json")
+//    private String metaJson;
 
     @Column(name = "created_at", columnDefinition = "datetime(6)")
     private LocalDateTime createdAt;

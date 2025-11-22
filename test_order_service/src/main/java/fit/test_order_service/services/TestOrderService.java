@@ -71,5 +71,5 @@ public interface TestOrderService {
      */
     TestOrderResponse createShellOrderFromBarcode(String barcode);
 
-
+    TestOrderResponse autoCreateTestOrder(AutoCreateTestOrderRequest request);
 }

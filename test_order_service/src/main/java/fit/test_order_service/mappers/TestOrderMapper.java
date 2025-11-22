@@ -156,8 +156,8 @@ public class TestOrderMapper {
                 .entrySource(testResult.getEntrySource())
                 .enteredBy(testResult.getEnteredBy())
                 .enteredAt(testResult.getEnteredAt())
-                .flagCode(testResult.getFlagCode())
-                .flagSeverity(testResult.getFlagSeverity())
+//                .flagCode(testResult.getFlagCode())
+//                .flagSeverity(testResult.getFlagSeverity())
                 .build();
     }
 

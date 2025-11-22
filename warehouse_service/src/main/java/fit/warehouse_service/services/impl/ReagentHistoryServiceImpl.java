@@ -291,6 +291,6 @@ public class ReagentHistoryServiceImpl implements ReagentHistoryService {
         }
 
         // Trả về ID và số lượng hiện tại
-        return new ReagentLotStatusResponse(reagentLot.getId(), reagentLot.getCurrentQuantity());
+        return new ReagentLotStatusResponse(reagentLot.getId(), reagentLot.getCurrentQuantity(),reagentLot.getReagentType().getUsagePerRun());
     }
 }

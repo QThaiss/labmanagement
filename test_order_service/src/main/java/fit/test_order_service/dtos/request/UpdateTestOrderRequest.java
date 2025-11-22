@@ -39,4 +39,9 @@ public class UpdateTestOrderRequest {
     @Email(message = "Email must be in valid format")
     @Size(max = 128, message = "Email must not exceed 128 characters")
     private String email;
+
+    private String testTypeId;
+
+    // Chỉ khi isAutoCreated = true mới được phép cập nhật medicalRecordCode
+    private String medicalRecordCode;
 }

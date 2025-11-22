@@ -13,7 +13,5 @@ package fit.warehouse_service.enums;
  * @version:    1.0
  */
 public enum ProtocolType {
-    HL7,
-    ASTM,
-    REST_API
+    HL7
 }

@@ -28,8 +28,10 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.stream.Collectors;
 
 /*
  * @description: Implementation of the Hl7Validator interface.
@@ -72,6 +74,18 @@ public class Hl7ValidatorImpl implements Hl7Validator {
                 Hl7ValidationResult obrResult = validateOBR(orderObs.getOBR());
                 if (!obrResult.isValid()) {
                     return obrResult;
+                }
+
+                // Đảm bảo OBR chứa đúng OrderId mong đợi
+                String placerOrderId = orderObs.getOBR().getPlacerOrderNumber().getEntityIdentifier().getValue();
+                String fillerOrderId = orderObs.getOBR().getFillerOrderNumber().getEntityIdentifier().getValue();
+                boolean matchesOrderId = isEmpty(orderId)
+                        || orderId.equals(placerOrderId)
+                        || orderId.equals(fillerOrderId);
+                if (!matchesOrderId) {
+                    return Hl7ValidationResult.error("OBR-2/3",
+                            String.format("HL7 message mismatch: expected Order ID %s but found placer=%s, filler=%s",
+                                    orderId, placerOrderId, fillerOrderId));
                 }
 
                 // Validate OBX segments
@@ -122,7 +136,8 @@ public class Hl7ValidatorImpl implements Hl7Validator {
     private Hl7ValidationResult validatePID(PID pid, String orderId) throws HL7Exception {
         // PID-3: Patient ID (required)
         if (pid.getPatientIdentifierList().length == 0 ||
-                isEmpty(pid.getPatientIdentifierList()[0].getIDNumber().getValue())) {
+            Arrays.stream(pid.getPatientIdentifierList())
+                    .noneMatch(id -> id.getIDNumber() != null && !isEmpty(id.getIDNumber().getValue()))) {
             return Hl7ValidationResult.error("PID-3", "Patient ID is required");
         }
 
@@ -153,11 +168,28 @@ public class Hl7ValidatorImpl implements Hl7Validator {
                 return Hl7ValidationResult.error("PID", "Test Order not found for ID: " + orderId);
             }
 
-            // Validate Patient ID
-            String hl7PatientId = pid.getPatientIdentifierList()[0].getIDNumber().getValue();
-            if (!testOrder.getMedicalRecordId().equals(hl7PatientId)) {
+            List<String> hl7Ids = Arrays.stream(pid.getPatientIdentifierList())
+                    .filter(id -> id.getIDNumber() != null)
+                    .map(id -> id.getIDNumber().getValue())
+                    .filter(id -> id != null && !id.isBlank())
+                    .collect(Collectors.toList());
+
+            List<String> expectedIds = new ArrayList<>();
+            if (!isEmpty(testOrder.getMedicalRecordId())) expectedIds.add(testOrder.getMedicalRecordId());
+            if (!isEmpty(testOrder.getMedicalRecordCode())) expectedIds.add(testOrder.getMedicalRecordCode());
+            if (!isEmpty(testOrder.getBarcode())) expectedIds.add(testOrder.getBarcode());
+
+            boolean patientIdMatches = !expectedIds.isEmpty() && hl7Ids.stream()
+                    .anyMatch(hl7Id -> expectedIds.stream()
+                            .anyMatch(expected -> expected.equalsIgnoreCase(hl7Id)));
+
+            if (!patientIdMatches) {
                 return Hl7ValidationResult.error("PID-3",
-                        String.format("Patient ID mismatch: HL7=%s, Order=%s", hl7PatientId, testOrder.getMedicalRecordId()));
+//                        String.format("Patient ID mismatch: HL7=%s, Order=%s", hl7PatientId, testOrder.getMedicalRecordId())
+                        String.format("Patient ID mismatch: HL7 IDs=%s, Order IDs=%s",
+                                hl7Ids,
+                                expectedIds.isEmpty() ? "[]" : expectedIds)
+                );
             }
 
             // Validate Date of Birth
@@ -184,9 +216,11 @@ public class Hl7ValidatorImpl implements Hl7Validator {
     }
 
     private Hl7ValidationResult validateOBR(OBR obr) throws HL7Exception {
-        // OBR-3: Test Order Number (required)
-        if (isEmpty(obr.getFillerOrderNumber().getEntityIdentifier().getValue())) {
-            return Hl7ValidationResult.error("OBR-3", "Test Order Number is required");
+        // OBR-2/OBR-3: Test Order Number (required in either field)
+        boolean hasPlacer = !isEmpty(obr.getPlacerOrderNumber().getEntityIdentifier().getValue());
+        boolean hasFiller = !isEmpty(obr.getFillerOrderNumber().getEntityIdentifier().getValue());
+        if (!hasPlacer && !hasFiller) {
+            return Hl7ValidationResult.error("OBR-2/3", "Test Order Number is required in Placer or Filler field");
         }
 
         // OBR-4: Universal Service ID (required)

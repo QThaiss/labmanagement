@@ -21,13 +21,13 @@ public class SortFields {
     public static final Set<String> CONFIGURATION_SORT_FIELDS  =
             Set.of( "createdAt");
 
-    public static final String DEFAULT_CONFIGURATION_SORT  = "id";
+    public static final String DEFAULT_CONFIGURATION_SORT  = "createdAt";
 
     // --- ĐÃ THÊM ---
     public static final Set<String> INSTRUMENT_SORT_FIELDS =
             Set.of("id", "name", "ipAddress", "createdAt", "updatedAt");
 
-    public static final String DEFAULT_INSTRUMENT_SORT = "updatedAt";
+    public static final String DEFAULT_INSTRUMENT_SORT = "createdAt";
     // --- KẾT THÚC THÊM ---
 
     public static final Set<String> TEST_PARAMETER_SORT_FIELDS =

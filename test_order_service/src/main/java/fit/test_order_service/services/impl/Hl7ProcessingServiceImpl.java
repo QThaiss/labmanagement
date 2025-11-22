@@ -70,14 +70,17 @@ public class Hl7ProcessingServiceImpl implements Hl7ProcessingService {
 
     @Override
     public Hl7ProcessResponse processHl7Message(Hl7MessageRequest request) {
+        log.debug("Received HL7 payload:\n{}", request.getHl7Payload());
         // Trích xuất metadata từ payload HL7
         Hl7Metadata metadata = hl7ParserService.extractMetadata(request.getHl7Payload());
 
         String messageId = metadata.getMessageId();
-        String source = metadata.getSendingApplication();
+        String sendingApp = metadata.getSendingApplication();
         String facility = metadata.getSendingFacility();
-        String fullSource = (source != null ? source : "UNKNOWN")
+        String fullSource = (sendingApp != null ? sendingApp : "UNKNOWN")
                 + (facility != null ? "-" + facility : "");
+        String enteredBy = truncate(sendingApp != null ? sendingApp : fullSource, 36);
+
 
         // Kiểm tra trùng lặp message ID
         if (rawMessageRepository.existsByMessageId(messageId)) {
@@ -133,8 +136,8 @@ public class Hl7ProcessingServiceImpl implements Hl7ProcessingService {
                         .findByOrderIdAndAnalyteNameIgnoreCase(orderId, parsed.getAnalyteName())
                         .stream()
                         .findFirst()
-                        .map(existing -> updateExistingResult(existing, parsed, messageId, fullSource))
-                        .orElseGet(() -> createTestResult(parsed, messageId, fullSource, order));
+                        .map(existing -> updateExistingResult(existing, parsed, messageId, enteredBy))
+                        .orElseGet(() -> createTestResult(parsed, messageId, enteredBy, order));
 
                 // Tạo và lưu TestResult
                 TestResult saved = testResultRepository.save(result);
@@ -168,6 +171,13 @@ public class Hl7ProcessingServiceImpl implements Hl7ProcessingService {
         }
     }
 
+    private String truncate(String value, int maxLength) {
+        if (value == null || value.length() <= maxLength) {
+            return value;
+        }
+        return value.substring(0, maxLength);
+    }
+
     private boolean shouldPersistResult(ParsedTestResult parsed, Message message) throws HL7Exception {
         if (message instanceof ORU_R01 oru) {
             // Tìm OBX tương ứng và kiểm tra OBX-11
@@ -198,6 +208,11 @@ public class Hl7ProcessingServiceImpl implements Hl7ProcessingService {
                 .build();
 
         return rawMessageRepository.save(rawMessage);
+    }
+
+    private String decodeHl7(byte[] payload) {
+        if (payload == null) return null;
+        return new String(payload, StandardCharsets.UTF_8);
     }
 
     // Tạo bản ghi audit ingest

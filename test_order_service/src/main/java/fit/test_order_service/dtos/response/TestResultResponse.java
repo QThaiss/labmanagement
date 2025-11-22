@@ -36,6 +36,6 @@ public class TestResultResponse {
     private EntrySource entrySource;
     private String enteredBy;
     private LocalDateTime enteredAt;
-    private String flagCode;
-    private FlagSeverity flagSeverity;
+//    private String flagCode;
+//    private FlagSeverity flagSeverity;
 }

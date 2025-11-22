@@ -2,7 +2,7 @@ package fit.test_order_service.client;
 
 import fit.test_order_service.client.dtos.ReagentDeductionRequest;
 import fit.test_order_service.client.dtos.ReagentDeductionResponse;
-import fit.test_order_service.client.dtos.TestParameterResponse;
+import fit.test_order_service.dtos.response.TestParameterResponse;
 import fit.test_order_service.dtos.response.ApiResponse;
 import org.springframework.cloud.openfeign.FeignClient;
 import org.springframework.web.bind.annotation.*;

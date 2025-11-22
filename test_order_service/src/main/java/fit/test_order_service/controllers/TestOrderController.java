@@ -218,4 +218,16 @@ public class TestOrderController {
                 .build();
         return new ResponseEntity<>(apiResponse, HttpStatus.OK);
     }
+
+    // Api giao tiếp nội bộ từ Instrument Service để tự động tạo Test Order từ mẫu xét nghiệm
+    @PostMapping("/internal/auto-create")
+    public ResponseEntity<ApiResponse<TestOrderResponse>> autoCreateFromInstrument(
+            @Valid @RequestBody AutoCreateTestOrderRequest request
+    ) {
+        TestOrderResponse response = testOrderService.autoCreateTestOrder(request);
+
+        return ResponseEntity
+                .status(HttpStatus.CREATED)
+                .body(ApiResponse.success(response, "Auto-created test order from instrument sample"));
+    }
 }

@@ -6,18 +6,26 @@
 
 package fit.test_order_service.services.impl;
 
+import fit.test_order_service.configs.RabbitMQConfig;
 import fit.test_order_service.dtos.request.Hl7MessageRequest;
+import fit.test_order_service.dtos.request.InstrumentOrderRequest;
 import fit.test_order_service.dtos.response.Hl7ProcessResponse;
+import fit.test_order_service.dtos.response.TestOrderDetailResponse;
 import fit.test_order_service.entities.TestOrder;
+import fit.test_order_service.enums.OrderStatus;
+import fit.test_order_service.exceptions.BadRequestException;
 import fit.test_order_service.entities.TestResult;
 import fit.test_order_service.exceptions.NotFoundException;
+import fit.test_order_service.mappers.TestOrderMapper;
 import fit.test_order_service.repositories.TestOrderRepository;
 import fit.test_order_service.services.Hl7OrderSenderService;
 import fit.test_order_service.services.Hl7ParserService;
 import fit.test_order_service.services.Hl7ProcessingService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
@@ -41,6 +49,10 @@ public class Hl7OrderSenderServiceImpl implements Hl7OrderSenderService {
     private final Hl7ProcessingService hl7ProcessService;
 
     private final TestOrderRepository testOrderRepository;
+
+    private final TestOrderMapper testOrderMapper;
+
+    private final RabbitTemplate rabbitTemplate;
 
     @Override
     public Hl7ProcessResponse sendOrderAndProcessResult(String testOrderId) {
@@ -79,6 +91,50 @@ public class Hl7OrderSenderServiceImpl implements Hl7OrderSenderService {
 //        log.info("[HL7] Received raw response:\n{}", response);
 //        return response;
         return null;
+    }
+
+    @Override
+    @Transactional
+    public String requestAnalysis(String testOrderId) {
+        // 1. Lấy order và items
+        TestOrder order = testOrderRepository.findByOrderIdAndDeletedFalse(testOrderId)
+                .orElseThrow(() -> new NotFoundException("Test order not found: " + testOrderId));
+
+        // 2. Kiểm tra trạng thái
+        if (order.getStatus() != OrderStatus.PENDING) {
+            throw new BadRequestException("Order is already processing or completed. Current status: " + order.getStatus());
+        }
+
+        // 3. Map entity sang DTO chi tiết
+        TestOrderDetailResponse orderDetails = testOrderMapper.toDetailResponse(order);
+
+        // 4. Tạo đối tượng message cho hàng đợi
+        InstrumentOrderRequest requestDto = new InstrumentOrderRequest(orderDetails);
+
+        // 5. Gửi message đến RabbitMQ
+        try {
+            log.info("Publishing order request {} to exchange '{}' with routing key '{}'",
+                    order.getOrderId(), RabbitMQConfig.EXCHANGE_NAME, RabbitMQConfig.ROUTING_KEY);
+
+            rabbitTemplate.convertAndSend(
+                    RabbitMQConfig.EXCHANGE_NAME,
+                    RabbitMQConfig.ROUTING_KEY,
+                    requestDto
+            );
+
+            // 6. Cập nhật trạng thái order
+            order.setStatus(OrderStatus.IN_PROGRESS); // Chuyển trạng thái sang "Đang xử lý"
+            testOrderRepository.save(order);
+
+            log.info("Order {} status updated to PROCESSING.", order.getOrderId());
+
+            return "Order " + order.getOrderCode() + " successfully submitted for analysis.";
+
+        } catch (Exception e) {
+            log.error("Failed to send order request message for order ID {}: {}", testOrderId, e.getMessage(), e);
+            // Nếu gửi message thất bại, transaction sẽ rollback và status không bị thay đổi
+            throw new RuntimeException("Failed to queue order analysis request. Please try again.", e);
+        }
     }
 
     // Kiểm tra chế độ mock (dev)

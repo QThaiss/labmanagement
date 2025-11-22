@@ -68,5 +68,7 @@ public interface TestOrderRepository extends JpaRepository<TestOrder, String> {
     List<TestOrder> findByDeletedFalseAndCreatedAtBetween(LocalDateTime start, LocalDateTime end);
 
     List<TestOrder> findByDeletedFalse();
+
+    Optional<TestOrder> findByBarcode(String barcode);
 }
 

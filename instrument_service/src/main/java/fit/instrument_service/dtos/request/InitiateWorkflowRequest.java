@@ -29,7 +29,7 @@ public class InitiateWorkflowRequest {
     @NotBlank(message = "Instrument ID is required")
     private String instrumentId;
 
-    private String cassetteId;
+//    private String cassetteId;
 
     @NotEmpty(message = "At least one sample is required")
     @Valid

@@ -12,16 +12,17 @@ import ca.uhn.hl7v2.model.v25.segment.*;
 import ca.uhn.hl7v2.parser.Parser;
 import feign.FeignException;
 import fit.instrument_service.client.TestOrderFeignClient;
-import fit.instrument_service.client.dtos.TestOrderDetailResponse;
+import fit.instrument_service.client.WarehouseFeignClient;
+import fit.instrument_service.client.dtos.*;
+import fit.instrument_service.client.dtos.ReagentLotStatusResponse;
+import fit.instrument_service.client.dtos.enums.Gender;
 import fit.instrument_service.dtos.request.InitiateWorkflowRequest;
 import fit.instrument_service.dtos.request.SampleInput;
+import fit.instrument_service.dtos.response.ApiResponse;
 import fit.instrument_service.dtos.response.SampleResponse;
 import fit.instrument_service.dtos.response.WorkflowResponse;
 import fit.instrument_service.entities.*;
-import fit.instrument_service.enums.InstrumentStatus;
-import fit.instrument_service.enums.PublishStatus;
-import fit.instrument_service.enums.SampleStatus;
-import fit.instrument_service.enums.WorkflowStatus;
+import fit.instrument_service.enums.*;
 import fit.instrument_service.exceptions.NotFoundException;
 import fit.instrument_service.repositories.*;
 import fit.instrument_service.services.BarcodeValidationService;
@@ -38,6 +39,8 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /*
@@ -54,12 +57,14 @@ public class SampleAnalysisWorkflowServiceImpl implements SampleAnalysisWorkflow
     private final InstrumentRepository instrumentRepository;
     private final BloodSampleRepository bloodSampleRepository;
     private final RawTestResultRepository rawTestResultRepository;
+    private final InstrumentReagentRepository instrumentReagentRepository;
     private final SampleProcessingWorkflowRepository workflowRepository;
     private final CassetteRepository cassetteRepository;
     private final BarcodeValidationService barcodeValidationService;
     private final ReagentCheckService reagentCheckService;
     private final NotificationService notificationService;
     private final TestOrderFeignClient testOrderFeignClient;
+    private final WarehouseFeignClient warehouseFeignClient;
     private final Parser parser;
     private final Random random = new Random();
 
@@ -85,10 +90,23 @@ public class SampleAnalysisWorkflowServiceImpl implements SampleAnalysisWorkflow
             throw new IllegalStateException("Insufficient reagent levels. Workflow halted.");
         }
 
+        // Kiểm tra tất cả mẫu có cùng cassetteId không
+        List<String> cassetteIds = request.getSamples().stream()
+                .map(SampleInput::getCassetteId)
+                .distinct()
+                .toList();
+
+        // Nếu có nhiều hơn 1 cassetteId thì ném lỗi
+        if (cassetteIds.size() > 1) {
+            throw new IllegalArgumentException("All samples in a workflow must have the same cassetteId.");
+        }
+
+        String cassetteId = cassetteIds.get(0);
+
         // Tạo quy trình mới và lưu vào cơ sở dữ liệu
         SampleProcessingWorkflow workflow = new SampleProcessingWorkflow();
         workflow.setInstrumentId(request.getInstrumentId());
-        workflow.setCassetteId(request.getCassetteId());
+        workflow.setCassetteId(cassetteId);
         workflow.setStatus(WorkflowStatus.INITIATED);
         workflow.setStartedAt(LocalDateTime.now());
         workflow.setReagentCheckPassed(true);
@@ -120,7 +138,7 @@ public class SampleAnalysisWorkflowServiceImpl implements SampleAnalysisWorkflow
         return buildWorkflowResponse(workflow);
     }
 
-    // Hàm xử lý từng mẫu đầu vào
+    // Hàm xử lý từng mẫu trong request
     private BloodSample processSampleInput(SampleInput input, String workflowId, String instrumentId) {
         log.info("Processing sample input with barcode: {}", input.getBarcode());
 
@@ -130,67 +148,125 @@ public class SampleAnalysisWorkflowServiceImpl implements SampleAnalysisWorkflow
         sample.setWorkflowId(workflowId);
         sample.setInstrumentId(instrumentId);
         sample.setCassetteId(input.getCassetteId());
+
+        // Đặt trạng thái ban đầu là PENDING
         sample.setStatus(SampleStatus.PENDING);
 
-        // Xác thực mã vạch, nếu không hợp lệ thì đánh dấu bỏ qua
+        // Kiểm tra mã vạch, nếu không hợp lệ thì đánh dấu bỏ qua
         if (!barcodeValidationService.isValidBarcode(input.getBarcode())) {
             log.warn("Invalid barcode: {}", input.getBarcode());
             sample.setStatus(SampleStatus.SKIPPED);
             sample.setSkipReason("Invalid barcode format");
-            sample = bloodSampleRepository.save(sample);
+            bloodSampleRepository.save(sample);
             notificationService.notifySampleStatusUpdate(sample);
             return sample;
         }
 
-        // Xử lý đơn hàng xét nghiệm
+        // Xử lý TestOrder nếu được cung cấp
         if (StringUtils.hasText(input.getTestOrderId())) {
-            // Kiểm tra đơn hàng xét nghiệm có tồn tại không, nếu không thì tạo mới
-            log.info("Checking test order ID: {}", input.getTestOrderId());
             try {
-                testOrderFeignClient.getTestOrderById(input.getTestOrderId());
-                sample.setTestOrderId(input.getTestOrderId());
+                // Lấy thông tin TestOrder từ Test Order Service
+                ApiResponse<TestOrderResponse> response =
+                        testOrderFeignClient.getTestOrderById(input.getTestOrderId());
+
+                TestOrderResponse order = response != null ? response.getData() : null;
+
+                // Kiểm tra TestOrder có tồn tại không, nếu không thì đánh dấu bỏ qua
+                if (order == null || !StringUtils.hasText(order.getId())) {
+                    log.error("Test order not found {}", input.getTestOrderId());
+                    sample.setStatus(SampleStatus.SKIPPED);
+                    sample.setSkipReason("Test order not found");
+                    bloodSampleRepository.save(sample);
+                    notificationService.notifySampleStatusUpdate(sample);
+                    return sample;
+                }
+
+                // Kiểm tra mã vạch có khớp với TestOrder không, nếu không thì đánh dấu bỏ qua
+                if (!input.getBarcode().equals(order.getBarcode())) {
+                    log.error("Barcode mismatch: sample {} / order {}",
+                            input.getBarcode(), order.getBarcode());
+                    sample.setStatus(SampleStatus.SKIPPED);
+                    sample.setSkipReason("Barcode does not match Test Order");
+                    bloodSampleRepository.save(sample);
+                    notificationService.notifySampleStatusUpdate(sample);
+                    return sample;
+                }
+
+                // Nếu TestOrder hợp lệ, gán ID cho mẫu
+                sample.setTestOrderId(order.getId());
                 sample.setTestOrderAutoCreated(false);
+
             } catch (FeignException e) {
-                log.warn("Test order not found: {}", input.getTestOrderId());
-                // Create new test order
-                String newTestOrderId = createTestOrder(input.getBarcode());
-                sample.setTestOrderId(newTestOrderId);
-                sample.setTestOrderAutoCreated(true);
+                log.error("Error fetching Test Order: {}", e.getMessage());
+                sample.setStatus(SampleStatus.SKIPPED);
+                sample.setSkipReason("Test Order Service unavailable");
+                bloodSampleRepository.save(sample);
+                notificationService.notifySampleStatusUpdate(sample);
+                return sample;
             }
+
         } else {
-            // Tạo mới đơn hàng xét nghiệm nếu không cung cấp
-            log.info("No test order provided for barcode: {}. Creating new test order.", input.getBarcode());
-            String newTestOrderId = createTestOrder(input.getBarcode());
+            // Tạo mới TestOrder nếu không cung cấp
+            log.info("No test order provided → Auto-create");
+
+            String newTestOrderId = createTestOrder(input.getBarcode(), workflowId);
+
             sample.setTestOrderId(newTestOrderId);
             sample.setTestOrderAutoCreated(true);
+
+            notificationService.notifyAutoCreatedTestOrder(newTestOrderId, input.getBarcode());
         }
 
+        // Đặt trạng thái mẫu thành VALIDATED và thông báo
         sample.setStatus(SampleStatus.VALIDATED);
-        sample = bloodSampleRepository.save(sample);
+        bloodSampleRepository.save(sample);
         notificationService.notifySampleStatusUpdate(sample);
 
         return sample;
     }
 
     // Hàm tạo đơn hàng xét nghiệm mới
-    private String createTestOrder(String barcode) {
-        log.info("Creating new test order for barcode: {}", barcode);
+    private String createTestOrder(String barcode, String workflowId) {
+        log.info("Auto-creating TestOrder for barcode: {}", barcode);
 
         try {
-            Map<String, Object> testOrderData = new HashMap<>();
-            testOrderData.put("barcode", barcode);
-            testOrderData.put("autoCreated", true);
-            testOrderData.put("requiresPatientMatch", true);
+            AutoCreateTestOrderRequest request = new AutoCreateTestOrderRequest();
+            request.setBarcode(barcode);
+            request.setAutoCreated(true);
+            request.setRequiresPatientMatch(true);
 
-            var response = testOrderFeignClient.createTestOrder(testOrderData);
-            String testOrderId = (String) response.getData().get("orderId");
-            log.info("Created test order: {} for barcode: {}", testOrderId, barcode);
+            // Gọi API auto-create từ Test Order Service
+            ApiResponse<TestOrderResponse> response =
+                    testOrderFeignClient.autoCreateTestOrder(request);
+
+            TestOrderResponse data = response != null ? response.getData() : null;
+            log.debug("Auto-create response data: {}", data);
+            String testOrderId = (data != null ? data.getId() : null);
+
+            // Nếu không nhận được ID thì tạo ID giả
+            if (!StringUtils.hasText(testOrderId)) {
+                log.warn("Auto-create returned empty ID for barcode: {}", barcode);
+                testOrderId = "AUTO_CREATE" + UUID.randomUUID();
+            }
+
+            log.info("Auto-created TestOrder: {} for barcode: {}", testOrderId, barcode);
             return testOrderId;
+
         } catch (FeignException e) {
-            log.error("Failed to create test order for barcode: {}", barcode, e);
-            // Return a placeholder ID to continue processing
-            return "PENDING_" + UUID.randomUUID().toString();
+            log.error("Failed to auto-create TestOrder for barcode {}. Cause: {}", barcode, e.getMessage());
+
+            // Đánh dấu dịch vụ Test Order không khả dụng
+            markTestOrderServiceUnavailable(workflowId);
+            return "AUTO_CREATE" + UUID.randomUUID();
         }
+    }
+
+    // Hàm đánh dấu dịch vụ Test Order không khả dụng trong workflow
+    private void markTestOrderServiceUnavailable(String workflowId) {
+        workflowRepository.findById(workflowId).ifPresent(workflow -> {
+            workflow.setTestOrderServiceAvailable(false);
+            workflowRepository.save(workflow);
+        });
     }
 
     // Hàm thực thi quy trình
@@ -205,7 +281,7 @@ public class SampleAnalysisWorkflowServiceImpl implements SampleAnalysisWorkflow
             List<BloodSample> samples = bloodSampleRepository.findByWorkflowId(workflow.getId());
             List<BloodSample> validatedSamples = samples.stream()
                     .filter(s -> s.getStatus() == SampleStatus.VALIDATED)
-                    .collect(Collectors.toList());
+                    .toList();
 
             // Đặt trạng thái mẫu thành QUEUED và thông báo
             for (BloodSample sample : validatedSamples) {
@@ -249,7 +325,7 @@ public class SampleAnalysisWorkflowServiceImpl implements SampleAnalysisWorkflow
         }
     }
 
-    // Hàm xử lý mẫ
+    // Hàm xử lý mẫu
     private void processSample(BloodSample sample) {
         log.info("Processing sample: {}", sample.getBarcode());
 
@@ -262,29 +338,27 @@ public class SampleAnalysisWorkflowServiceImpl implements SampleAnalysisWorkflow
         try {
             Thread.sleep(100); // Giả lập thời gian xử lý
 
-            Map<String, String> simulatedResults = new HashMap<>();
-            simulatedResults.put("WBC", String.format("%.1f", 4.0 + (random.nextDouble() * 6.0))); // vd: 7.2
-            simulatedResults.put("RBC", String.format("%.1f", 3.5 + (random.nextDouble() * 2.0))); // vd: 4.8
-            simulatedResults.put("HGB", String.format("%.1f", 12.0 + (random.nextDouble() * 5.0))); // vd: 14.5
+            // Giảm hóa chất sử dụng cho mẫu
+            deductReagents(sample.getInstrumentId());
 
-            TestOrderDetailResponse orderDetails = null;
-            if (!sample.getTestOrderId().startsWith("PENDING_")) {
-                try {
-                    // Gọi endpoint public để lấy đầy đủ chi tiết
-                    orderDetails = testOrderFeignClient.getTestOrderDetailsById(sample.getTestOrderId()).getData();
-                    log.info("Successfully fetched patient data for PID segment: {}", orderDetails.getFullName());
-                } catch (FeignException e) {
-                    log.warn("Could not fetch patient details for HL7 PID segment. Feign error: {}", e.getMessage());
-                }
-            } else {
-                log.warn("Skipping patient detail fetch for PENDING order.");
-            }
+            // Lấy chi tiết đơn hàng xét nghiệm
+            TestOrderResponse orderDetails = fetchTestOrderDetails(sample);
+            // Mô phỏng kết quả xét nghiệm
+            Map<TestParameterResponse, Double> simulatedResults = simulateResults(orderDetails);
+            // Lưu kết quả thô vào cơ sở dữ liệu
+            Map<String, String> rawResults = simulatedResults.entrySet().stream()
+                    .collect(Collectors.toMap(
+                            entry -> entry.getKey().getAbbreviation(),
+                            entry -> formatResultValue(entry.getValue()),
+                            (a, b) -> a,
+                            LinkedHashMap::new
+                    ));
 
             // Chuyển đổi kết quả sang định dạng HL7
             String hl7Message = convertToHL7(sample, simulatedResults, orderDetails);
 
             // Xuất bản kết quả HL7
-            publishResults(hl7Message, sample, simulatedResults);
+            publishResults(hl7Message, sample, rawResults);
 
             // Cập nhật trạng thái mẫu thành COMPLETED và thông báo
             sample.setStatus(SampleStatus.COMPLETED);
@@ -301,6 +375,308 @@ public class SampleAnalysisWorkflowServiceImpl implements SampleAnalysisWorkflow
         }
     }
 
+    // Hàm giảm hóa chất sử dụng cho mẫu
+    private void deductReagents(String instrumentId) {
+        log.info("Deducting reagents for instrument: {}", instrumentId);
+
+        // Lấy tất cả lô hóa chất đang In Use
+        List<InstrumentReagent> reagents =
+                instrumentReagentRepository.findByInstrumentId(instrumentId)
+                        .stream()
+                        .filter(r -> r.getStatus() == ReagentStatus.IN_USE)
+                        .toList();
+
+        // Nếu không có hóa chất nào thì thông báo và dừng quy trình
+        if (reagents.isEmpty()) {
+            log.error("No reagent in use for instrument {}", instrumentId);
+            notificationService.notifyInsufficientReagents(instrumentId);
+            throw new IllegalStateException("No reagent available for this instrument");
+        }
+
+        // Giảm mỗi reagent theo định mức sử dụng mỗi lần chạy
+        for (InstrumentReagent reagent : reagents) {
+            int usageAmount = determineUsageAmount(reagent);
+            int oldQuantity = Optional.ofNullable(reagent.getQuantity()).orElse(0);
+            int newQuantity = Math.max(0, oldQuantity - usageAmount);
+
+            reagent.setQuantity(newQuantity);
+            instrumentReagentRepository.save(reagent);
+
+            log.info("Reagent {} deducted by {}: {} -> {}", reagent.getReagentName(), usageAmount, oldQuantity, newQuantity);
+
+            // Nếu hết hóa chất thì thông báo + chuyển trạng thái máy
+            if (newQuantity == 0) {
+                notificationService.notifyReagentEmpty(instrumentId, reagent.getReagentName());
+
+                instrumentRepository.findById(instrumentId).ifPresent(inst -> {
+                    inst.setStatus(InstrumentStatus.ERROR);
+                    instrumentRepository.save(inst);
+                });
+
+                throw new IllegalStateException("Reagent exhausted: " + reagent.getReagentName());
+            }
+        }
+    }
+
+    // Hàm xác định mức sử dụng hóa chất cho mỗi mẫu
+    private int determineUsageAmount(InstrumentReagent reagent) {
+        // Lấy mức sử dụng mỗi lần chạy từ Warehouse Service
+        String usageDescriptor = fetchUsagePerRun(reagent.getLotNumber());
+
+        // Nếu không có mô tả mức sử dụng thì mặc định là 1
+        if (!StringUtils.hasText(usageDescriptor)) {
+            log.warn("Usage per run is unavailable for lot {}. Defaulting deduction to 1.", reagent.getLotNumber());
+            return 1;
+        }
+
+        // Phân tích mô tả mức sử dụng để lấy số lượng
+        return parseUsageAmount(usageDescriptor)
+                // Làm tròn lên và đảm bảo ít nhất là 1
+                .map(amount -> (int) Math.max(1, Math.ceil(amount)))
+                // Nếu không thể phân tích được thì mặc định là 1
+                .orElseGet(() -> {
+                    log.warn("Could not parse usage per run '{}' for lot {}. Defaulting deduction to 1.",
+                            usageDescriptor, reagent.getLotNumber());
+                    return 1;
+                });
+    }
+
+    // Hàm phân tích mô tả mức sử dụng để lấy số lượng
+    private Optional<Double> parseUsageAmount(String usageDescriptor) {
+        try {
+            // Sử dụng regex để tìm số trong chuỗi
+            Matcher matcher = Pattern.compile("([0-9]+(?:\\.[0-9]+)?)").matcher(usageDescriptor);
+
+            // Nếu tìm thấy thì trả về số đã phân tích
+            if (matcher.find()) {
+                return Optional.of(Double.parseDouble(matcher.group(1)));
+            }
+        } catch (Exception e) {
+            log.error("Error parsing usage descriptor '{}': {}", usageDescriptor, e.getMessage());
+        }
+
+        return Optional.empty();
+    }
+
+    // Hàm lấy mức sử dụng hóa chất cho mỗi lần chạy từ Warehouse Service
+    private String fetchUsagePerRun(String lotNumber) {
+        try {
+            // Gọi API từ Warehouse Service để lấy trạng thái lô hóa chất
+            ApiResponse<ReagentLotStatusResponse> response = warehouseFeignClient.getReagentLotStatus(lotNumber);
+
+            // Kiểm tra phản hồi và trả về mức sử dụng mỗi lần chạy nếu có
+            if (response != null && response.isSuccess() && response.getData() != null) {
+                return response.getData().getUsagePerRun();
+            }
+
+            log.warn("Usage per run missing for lot {} from warehouse response.", lotNumber);
+        } catch (FeignException e) {
+            log.error("Failed to fetch reagent lot status for {}: {}", lotNumber, e.getMessage());
+        } catch (Exception e) {
+            log.error("Unexpected error while fetching reagent usage for {}: {}", lotNumber, e.getMessage());
+        }
+
+        return null;
+    }
+
+    // Hàm lấy chi tiết đơn hàng xét nghiệm
+    private TestOrderResponse fetchTestOrderDetails(BloodSample sample) {
+        if (!StringUtils.hasText(sample.getTestOrderId()) || sample.getTestOrderId().startsWith("AUTO_CREATE_")) {
+            log.warn("Skipping patient detail fetch for AUTO_CREATE or missing order.");
+            return null;
+        }
+
+        try {
+            ApiResponse<TestOrderResponse> response = testOrderFeignClient.getTestOrderById(sample.getTestOrderId());
+            TestOrderResponse orderDetails = response != null ? response.getData() : null;
+            if (orderDetails != null) {
+                log.info("Successfully fetched patient data for PID segment: {}", orderDetails.getFullName());
+            }
+            return orderDetails;
+        } catch (FeignException e) {
+            log.warn("Could not fetch patient details for HL7 PID segment. Feign error: {}", e.getMessage());
+            markTestOrderServiceUnavailable(sample.getWorkflowId());
+            return null;
+        }
+    }
+
+    // Hàm mô phỏng kết quả xét nghiệm
+    private Map<TestParameterResponse, Double> simulateResults(TestOrderResponse orderDetails) {
+        List<TestParameterResponse> parameters = Optional.ofNullable(orderDetails)
+                .map(TestOrderResponse::getTestType)
+                .map(TestTypeResponse::getTestParameters)
+                .filter(list -> !list.isEmpty())
+                .orElseGet(this::defaultHematologyParameters);
+
+        Map<TestParameterResponse, Double> results = new LinkedHashMap<>();
+        for (TestParameterResponse parameter : parameters) {
+            double value = generateValueForParameter(parameter, orderDetails != null ? orderDetails.getGender() : null);
+            results.put(parameter, value);
+        }
+        return results;
+    }
+
+    // Hàm sinh giá trị kết quả cho từng tham số
+    private double generateValueForParameter(TestParameterResponse parameter, Gender gender) {
+        ParameterRangeResponse range = selectRange(parameter, gender);
+        double value;
+        if (range != null && range.getMinValue() != null && range.getMaxValue() != null) {
+            double min = range.getMinValue();
+            double max = range.getMaxValue();
+            double span = Math.max(0.1, max - min);
+            if (random.nextDouble() < 0.7) {
+                value = min + span * random.nextDouble();
+            } else if (random.nextBoolean()) {
+                value = max + span * (0.1 + random.nextDouble() * 0.4);
+            } else {
+                value = Math.max(0, min - span * (0.1 + random.nextDouble() * 0.4));
+            }
+        } else {
+            value = 1 + random.nextDouble() * 10;
+        }
+        return Double.parseDouble(formatResultValue(value));
+    }
+
+    // Hàm chọn dải tham số phù hợp với giới tính
+    private ParameterRangeResponse selectRange(TestParameterResponse parameter, Gender gender) {
+        if (parameter.getParameterRanges() == null || parameter.getParameterRanges().isEmpty()) {
+            return null;
+        }
+
+        return parameter.getParameterRanges().stream()
+                .filter(range -> genderMatches(range.getGender(), gender))
+                .findFirst()
+                .orElse(parameter.getParameterRanges().get(0));
+    }
+
+    // Hàm kiểm tra giới tính có khớp với dải tham số không
+    private boolean genderMatches(String rangeGender, Gender gender) {
+        if (!StringUtils.hasText(rangeGender)) {
+            return true;
+        }
+        if (gender == null) {
+            return "BOTH".equalsIgnoreCase(rangeGender);
+        }
+        if ("BOTH".equalsIgnoreCase(rangeGender)) {
+            return true;
+        }
+        return rangeGender.equalsIgnoreCase(gender.name());
+    }
+
+    // Hàm định dạng giá trị kết quả
+    private String formatResultValue(Double value) {
+        if (value == null) {
+            return "";
+        }
+        return String.format("%.1f", value);
+    }
+
+    // Hàm cung cấp tham số mặc định cho xét nghiệm huyết học
+    private List<TestParameterResponse> defaultHematologyParameters() {
+        List<TestParameterResponse> defaults = new ArrayList<>();
+
+        defaults.add(TestParameterResponse.builder()
+                .testParameterId("TP-WBC")
+                .paramName("White Blood Cell Count")
+                .abbreviation("WBC")
+                .description("Measures the number of white blood cells (leukocytes) in the blood, which helps fight infection.")
+                .parameterRanges(List.of(ParameterRangeResponse.builder()
+                        .gender("BOTH")
+                        .minValue(4000.0)
+                        .maxValue(10000.0)
+                        .unit("cells/µL")
+                        .build()))
+                .build());
+
+        defaults.add(TestParameterResponse.builder()
+                .testParameterId("TP-RBC")
+                .paramName("Red Blood Cell Count")
+                .abbreviation("RBC")
+                .description("Measures the number of red blood cells per unit of blood, which are responsible for carrying oxygen throughout the body.")
+                .parameterRanges(Arrays.asList(
+                        ParameterRangeResponse.builder().gender("MALE").minValue(4.7).maxValue(6.1).unit("million/µL").build(),
+                        ParameterRangeResponse.builder().gender("FEMALE").minValue(4.2).maxValue(5.4).unit("million/µL").build()
+                ))
+                .build());
+
+        defaults.add(TestParameterResponse.builder()
+                .testParameterId("TP-HGB")
+                .paramName("Hemoglobin")
+                .abbreviation("Hb/HGB")
+                .description("Measures the amount of hemoglobin in the blood, which is the protein in red blood cells that carries oxygen.")
+                .parameterRanges(Arrays.asList(
+                        ParameterRangeResponse.builder().gender("MALE").minValue(14.0).maxValue(18.0).unit("g/dL").build(),
+                        ParameterRangeResponse.builder().gender("FEMALE").minValue(12.0).maxValue(16.0).unit("g/dL").build()
+                ))
+                .build());
+
+        defaults.add(TestParameterResponse.builder()
+                .testParameterId("TP-HCT")
+                .paramName("Hematocrit")
+                .abbreviation("HCT")
+                .description("Represents the percentage of red blood cells in the blood volume, indicating oxygen-carrying capacity.")
+                .parameterRanges(Arrays.asList(
+                        ParameterRangeResponse.builder().gender("MALE").minValue(42.0).maxValue(52.0).unit("%").build(),
+                        ParameterRangeResponse.builder().gender("FEMALE").minValue(37.0).maxValue(47.0).unit("%").build()
+                ))
+                .build());
+
+        defaults.add(TestParameterResponse.builder()
+                .testParameterId("TP-PLT")
+                .paramName("Platelet Count")
+                .abbreviation("PLT")
+                .description("Measures the number of platelets in the blood, which are responsible for clotting.")
+                .parameterRanges(List.of(ParameterRangeResponse.builder()
+                        .gender("BOTH")
+                        .minValue(150000.0)
+                        .maxValue(350000.0)
+                        .unit("cells/µL")
+                        .build()))
+                .build());
+
+        defaults.add(TestParameterResponse.builder()
+                .testParameterId("TP-MCV")
+                .paramName("Mean Corpuscular Volume")
+                .abbreviation("MCV")
+                .description("Indicates the average size of red blood cells.")
+                .parameterRanges(List.of(ParameterRangeResponse.builder()
+                        .gender("BOTH")
+                        .minValue(80.0)
+                        .maxValue(100.0)
+                        .unit("fL")
+                        .build()))
+                .build());
+
+        defaults.add(TestParameterResponse.builder()
+                .testParameterId("TP-MCH")
+                .paramName("Mean Corpuscular Haemoglobin")
+                .abbreviation("MCH")
+                .description("Represents the average amount of haemoglobin per red blood cell.")
+                .parameterRanges(List.of(ParameterRangeResponse.builder()
+                        .gender("BOTH")
+                        .minValue(27.0)
+                        .maxValue(33.0)
+                        .unit("pg")
+                        .build()))
+                .build());
+
+        defaults.add(TestParameterResponse.builder()
+                .testParameterId("TP-MCHC")
+                .paramName("Mean Corpuscular Haemoglobin Concentration")
+                .abbreviation("MCHC")
+                .description("Calculates the average concentration of haemoglobin in red blood cells.")
+                .parameterRanges(List.of(ParameterRangeResponse.builder()
+                        .gender("BOTH")
+                        .minValue(32.0)
+                        .maxValue(36.0)
+                        .unit("g/dL")
+                        .build()))
+                .build());
+
+        return defaults;
+    }
+
+    // Helper để lấy ngày giờ theo chuẩn HL7
     private String getHl7DateTime(LocalDateTime ldt) {
         if(ldt == null) return null;
         return ldt.format(DateTimeFormatter.ofPattern("yyyyMMddHHmmss"));
@@ -312,7 +688,7 @@ public class SampleAnalysisWorkflowServiceImpl implements SampleAnalysisWorkflow
         return ld.format(DateTimeFormatter.ofPattern("yyyyMMdd"));
     }
 
-    private String convertToHL7(BloodSample sample, Map<String, String> results, TestOrderDetailResponse orderDetails) {
+    private String convertToHL7(BloodSample sample, Map<TestParameterResponse, Double> results, TestOrderResponse orderDetails) {
         log.debug("Converting sample results to HL7 format for barcode: {}", sample.getBarcode());
 
         ORU_R01 oru = new ORU_R01();
@@ -349,8 +725,9 @@ public class SampleAnalysisWorkflowServiceImpl implements SampleAnalysisWorkflow
                 pid.getPatientName(0).getGivenName().setValue("");
                 pid.getDateTimeOfBirth().getTime().setValue(getHl7Date(orderDetails.getDateOfBirth() != null ?
                         LocalDate.parse(orderDetails.getDateOfBirth()) : null)); // Ngày sinh
-                pid.getAdministrativeSex().setValue(orderDetails.getGender().name().substring(0, 1)); // M, F, O
-
+                if (orderDetails.getGender() != null) {
+                    pid.getAdministrativeSex().setValue(orderDetails.getGender().name().substring(0, 1)); // M, F, O
+                }
                 // Thêm Medical Record Code làm ID nội bộ
                 pid.getPatientIdentifierList(1).getIDNumber().setValue(orderDetails.getMedicalRecordCode());
                 pid.getPatientIdentifierList(1).getAssigningAuthority().getNamespaceID().setValue("MRN"); // Medical Record Number
@@ -372,30 +749,26 @@ public class SampleAnalysisWorkflowServiceImpl implements SampleAnalysisWorkflow
 
             // OBX - Observation/Result (Kết quả chi tiết - lặp)
             int obxSetId = 1;
-            for (Map.Entry<String, String> entry : results.entrySet()) {
-                String testName = entry.getKey();
-                String testValue = entry.getValue();
+            for (Map.Entry<TestParameterResponse, Double> entry : results.entrySet()) {
+                TestParameterResponse parameter = entry.getKey();
+                String abbreviation = StringUtils.hasText(parameter.getAbbreviation()) ? parameter.getAbbreviation() : parameter.getParamName();
+                String parameterName = StringUtils.hasText(parameter.getParamName()) ? parameter.getParamName() : abbreviation;
 
                 // Lấy một segment OBX mới
                 OBX obx = oru.getPATIENT_RESULT().getORDER_OBSERVATION().getOBSERVATION(obxSetId - 1).getOBX();
                 obx.getSetIDOBX().setValue(String.valueOf(obxSetId));
                 obx.getValueType().setValue("NM"); // NM = Numeric (Kiểu số)
-                obx.getObservationIdentifier().getIdentifier().setValue(testName); // Mã xét nghiệm (WBC)
-                obx.getObservationIdentifier().getText().setValue(testName); // Tên xét nghiệm (WBC)
+                obx.getObservationIdentifier().getIdentifier().setValue(abbreviation); // Mã xét nghiệm (WBC)
+                obx.getObservationIdentifier().getText().setValue(parameterName); // Tên xét nghiệm (WBC)
 
-                // Gán giá trị kết quả
-                obx.getObservationValue(0).parse(testValue);
+                obx.getObservationValue(0).parse(formatResultValue(entry.getValue()));
 
-                // TODO: Các đơn vị và dải tham chiếu này nên được lấy từ CSDL
-                if ("WBC".equals(testName)) {
-                    obx.getUnits().getIdentifier().setValue("10^9/L");
-                    obx.getReferencesRange().setValue("4.0-10.0");
-                } else if ("RBC".equals(testName)) {
-                    obx.getUnits().getIdentifier().setValue("10^12/L");
-                    obx.getReferencesRange().setValue("3.5-5.5");
-                } else {
-                    obx.getUnits().getIdentifier().setValue("g/dL");
-                    obx.getReferencesRange().setValue("12.0-17.5");
+                ParameterRangeResponse range = selectRange(parameter, orderDetails != null ? orderDetails.getGender() : null);
+                if (range != null && StringUtils.hasText(range.getUnit())) {
+                    obx.getUnits().getIdentifier().setValue(range.getUnit());
+                }
+                if (range != null && range.getMinValue() != null && range.getMaxValue() != null) {
+                    obx.getReferencesRange().setValue(String.format("%.1f-%.1f", range.getMinValue(), range.getMaxValue()));
                 }
 
                 obx.getObservationResultStatus().setValue("F"); // F = Final (Kết quả cuối)
@@ -418,56 +791,67 @@ public class SampleAnalysisWorkflowServiceImpl implements SampleAnalysisWorkflow
         log.info("Publishing HL7 results for sample: {}", sample.getBarcode());
         log.debug("HL7 Message: \n{}", hl7Message.replace("\r", "\n"));
 
-        // === BẮT ĐẦU LƯU VÀO DATABASE ===
+        // Luu kết quả thô vào cơ sở dữ liệu
+        RawTestResult rawResult = new RawTestResult();
+        rawResult.setInstrumentId(sample.getInstrumentId());
+        rawResult.setTestOrderId(sample.getTestOrderId());
+        rawResult.setBarcode(sample.getBarcode());
+        rawResult.setHl7Message(hl7Message);
+        rawResult.setRawResultData(rawResults);
+        rawResult.setPublishStatus(PublishStatus.PENDING);
+        rawResult.setReadyForDeletion(false);
+
         try {
-            RawTestResult rawResult = new RawTestResult();
-            rawResult.setInstrumentId(sample.getInstrumentId());
-            rawResult.setTestOrderId(sample.getTestOrderId());
-            rawResult.setBarcode(sample.getBarcode());
-            rawResult.setHl7Message(hl7Message);
-            rawResult.setRawResultData(rawResults); // Lưu dữ liệu thô (Map)
-
-            // Đặt trạng thái PENDING, chờ một dịch vụ khác (worker)
-            // lấy từ RabbitMQ và xử lý
-            rawResult.setPublishStatus(PublishStatus.PENDING);
-            rawResult.setReadyForDeletion(false); // Chưa sẵn sàng để xóa
-
-            // createdAt/createdBy sẽ được tự động điền bởi MongoCallbackConfig
-
-            rawTestResultRepository.save(rawResult);
-
+            rawResult = rawTestResultRepository.save(rawResult);
             log.info("Saved raw HL7 message to database with ID: {}", rawResult.getId());
-
-            // Cập nhật cờ 'resultsPublished' trên workflow
-            workflowRepository.findById(sample.getWorkflowId()).ifPresent(workflow -> {
-                workflow.setResultsPublished(true); // Đánh dấu là đã lưu
-                workflowRepository.save(workflow);
-            });
-
-            // TODO: Gửi tin nhắn vào RabbitMQ (ví dụ: gửi rawResult.getId())
-            // Bạn đã có RabbitMQConfig, bạn sẽ dùng RabbitTemplate để gửi
-            // rabbitTemplate.convertAndSend(
-            //     RabbitMQConfig.EXCHANGE_NAME,
-            //     RabbitMQConfig.ROUTING_KEY_RESULT, // (Giả sử bạn có routing key này)
-            //     rawResult.getId() // Gửi ID để worker tự truy vấn
-            // );
-
         } catch (Exception e) {
-            log.error("Failed to save RawTestResult for sample {}: {}", sample.getBarcode(), e.getMessage(), e);
+            handleRawResultPersistenceFailure(sample, e);
+            return;
+        }
 
-            // Nếu lưu DB thất bại, ta phải đánh dấu Sample là FAILED
-            sample.setStatus(SampleStatus.FAILED);
-            // sample.setSkipReason("Failed to save HL7 result"); // (Ghi chú lý do)
-            bloodSampleRepository.save(sample);
+        boolean publishedToTestOrder = publishToTestOrderService(hl7Message);
 
-            // Cập nhật Workflow là FAILED
-            workflowRepository.findById(sample.getWorkflowId()).ifPresent(workflow -> {
-                workflow.setStatus(WorkflowStatus.FAILED);
-                workflow.setErrorMessage("Failed to save RawTestResult for sample: " + sample.getBarcode());
-                workflowRepository.save(workflow);
-            });
+
+        PublishStatus publishStatus = (publishedToTestOrder )
+                ? PublishStatus.SENT
+                : PublishStatus.FAILED;
+
+        rawResult.setPublishStatus(publishStatus);
+        rawResult.setReadyForDeletion(publishedToTestOrder);
+        rawTestResultRepository.save(rawResult);
+
+        workflowRepository.findById(sample.getWorkflowId()).ifPresent(workflow -> {
+            workflow.setResultsPublished(true);
+            workflowRepository.save(workflow);
+        });
+    }
+
+    private boolean publishToTestOrderService(String hl7Message) {
+        try {
+            ApiResponse<Hl7ProcessResponse> response = testOrderFeignClient.publishHl7Result(hl7Message);
+            boolean success = response != null && Boolean.TRUE.equals(response.isSuccess());
+            if (!success) {
+                log.info("Test Order Service returned unsuccessful status for HL7 publish");
+            }
+            return success;
+        } catch (Exception e) {
+            log.error("Failed to publish HL7 results to Test Order Service: {}", e.getMessage());
+            return false;
         }
     }
+
+    private void handleRawResultPersistenceFailure(BloodSample sample, Exception e) {
+        log.error("Failed to save RawTestResult for sample {}: {}", sample.getBarcode(), e.getMessage(), e);
+
+        sample.setStatus(SampleStatus.FAILED);
+        bloodSampleRepository.save(sample);
+
+        workflowRepository.findById(sample.getWorkflowId()).ifPresent(workflow -> {
+        workflow.setStatus(WorkflowStatus.FAILED);
+        workflow.setErrorMessage("Failed to save RawTestResult for sample: " + sample.getBarcode());
+        workflowRepository.save(workflow);
+    });
+}
 
     @Override
     public WorkflowResponse processNextCassette(String instrumentId) {
@@ -505,7 +889,6 @@ public class SampleAnalysisWorkflowServiceImpl implements SampleAnalysisWorkflow
         // Tạo yêu cầu khởi tạo quy trình cho cassette này
         InitiateWorkflowRequest request = new InitiateWorkflowRequest();
         request.setInstrumentId(instrumentId);
-        request.setCassetteId(nextCassette.getCassetteIdentifier());
 
         // Thêm các mẫu vào quy trình xử lý
         List<SampleInput> sampleInputs = cassetteSamples.stream()

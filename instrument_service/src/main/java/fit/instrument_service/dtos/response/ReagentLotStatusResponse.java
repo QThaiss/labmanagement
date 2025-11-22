@@ -10,4 +10,5 @@ import lombok.NoArgsConstructor;
 public class ReagentLotStatusResponse {
     private String reagentLotId;
     private double currentQuantity;
+    private String usagePerRun;
 }

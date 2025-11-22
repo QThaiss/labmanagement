@@ -117,7 +117,7 @@ public class InstrumentServiceImpl implements InstrumentService {
 
         instrument.setIpAddress(request.getIpAddress());
         instrument.setPort(request.getPort());
-        instrument.setProtocolType(request.getProtocolType() != null ? request.getProtocolType() : ProtocolType.REST_API);
+        instrument.setProtocolType(request.getProtocolType() != null ? request.getProtocolType() : ProtocolType.HL7);
 
         Set<ReagentType> compatibleReagents = new HashSet<>();
         Set<ConfigurationSetting> configurations = new HashSet<>();
