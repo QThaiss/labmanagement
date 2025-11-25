@@ -33,6 +33,25 @@ public class RabbitMQConfig {
     public static final String QUEUE_NAME = "q.order_submitted_to_instrument";
     public static final String ROUTING_KEY = "r.order.submitted";
 
+    // --- BỔ SUNG CHO TÍNH NĂNG SYNC RESULTS (3.5.2.2) ---
+    // Queue để nhận kết quả xét nghiệm từ Instrument
+    public static final String TEST_RESULT_QUEUE = "q.test_order.test_result_sync";
+    // Routing key phải khớp với routingKey trong SampleAnalysisWorkflowServiceImpl ("instrument.test_result")
+    public static final String TEST_RESULT_ROUTING_KEY = "instrument.test_result";
+
+    // Bean cho Queue và Binding mới
+    @Bean
+    public Queue testResultQueue() {
+        // durable = true để đảm bảo message không mất khi RabbitMQ restart (Persistent Queue theo SRS 3.5.2.2)
+        return new Queue(TEST_RESULT_QUEUE, true);
+    }
+
+    @Bean
+    public Binding testResultBinding(Queue testResultQueue, TopicExchange instrumentExchange) {
+        return BindingBuilder.bind(testResultQueue).to(instrumentExchange).with(TEST_RESULT_ROUTING_KEY);
+    }
+    // ------------------------------------
+
     @Bean
     public TopicExchange instrumentExchange() {
         return new TopicExchange(EXCHANGE_NAME);
@@ -45,8 +64,8 @@ public class RabbitMQConfig {
     }
 
     @Bean
-    public Binding binding(Queue queue, TopicExchange exchange) {
-        return BindingBuilder.bind(queue).to(exchange).with(ROUTING_KEY);
+    public Binding binding(Queue orderSubmittedQueue, TopicExchange instrumentExchange) {
+        return BindingBuilder.bind(orderSubmittedQueue).to(instrumentExchange).with(ROUTING_KEY);
     }
 
     // Cấu hình để RabbitTemplate gửi/nhận JSON

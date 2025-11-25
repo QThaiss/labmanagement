@@ -18,4 +18,4 @@ public interface ReagentSupplyHistoryRepository extends JpaRepository<ReagentSup
     boolean existsByVendorIdAndLotNumber(@Param("vendorId") String vendorId, @Param("lotNumber") String lotNumber);
 
 
-} 
+}

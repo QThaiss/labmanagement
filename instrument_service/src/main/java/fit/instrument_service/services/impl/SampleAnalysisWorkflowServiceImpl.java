@@ -16,6 +16,7 @@ import fit.instrument_service.client.WarehouseFeignClient;
 import fit.instrument_service.client.dtos.*;
 import fit.instrument_service.client.dtos.ReagentLotStatusResponse;
 import fit.instrument_service.client.dtos.enums.Gender;
+import fit.instrument_service.configs.RabbitMQConfig;
 import fit.instrument_service.dtos.request.InitiateWorkflowRequest;
 import fit.instrument_service.dtos.request.SampleInput;
 import fit.instrument_service.dtos.response.ApiResponse;
@@ -23,6 +24,7 @@ import fit.instrument_service.dtos.response.SampleResponse;
 import fit.instrument_service.dtos.response.WorkflowResponse;
 import fit.instrument_service.entities.*;
 import fit.instrument_service.enums.*;
+import fit.instrument_service.events.TestResultPublishedEvent;
 import fit.instrument_service.exceptions.NotFoundException;
 import fit.instrument_service.repositories.*;
 import fit.instrument_service.services.BarcodeValidationService;
@@ -31,6 +33,7 @@ import fit.instrument_service.services.ReagentCheckService;
 import fit.instrument_service.services.SampleAnalysisWorkflowService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -66,6 +69,7 @@ public class SampleAnalysisWorkflowServiceImpl implements SampleAnalysisWorkflow
     private final TestOrderFeignClient testOrderFeignClient;
     private final WarehouseFeignClient warehouseFeignClient;
     private final Parser parser;
+    private final RabbitTemplate rabbitTemplate;
     private final Random random = new Random();
 
     @Override
@@ -678,13 +682,13 @@ public class SampleAnalysisWorkflowServiceImpl implements SampleAnalysisWorkflow
 
     // Helper để lấy ngày giờ theo chuẩn HL7
     private String getHl7DateTime(LocalDateTime ldt) {
-        if(ldt == null) return null;
+        if (ldt == null) return null;
         return ldt.format(DateTimeFormatter.ofPattern("yyyyMMddHHmmss"));
     }
 
     // Helper để lấy ngày theo chuẩn HL7
     private String getHl7Date(LocalDate ld) {
-        if(ld == null) return null;
+        if (ld == null) return null;
         return ld.format(DateTimeFormatter.ofPattern("yyyyMMdd"));
     }
 
@@ -809,16 +813,45 @@ public class SampleAnalysisWorkflowServiceImpl implements SampleAnalysisWorkflow
             return;
         }
 
-        boolean publishedToTestOrder = publishToTestOrderService(hl7Message);
+        // --- BỔ SUNG MỚI: Gửi Event sang RabbitMQ cho Monitoring Service ---
+        // Routing Key phải khớp với cái mà Monitoring Service đang lắng nghe ("instrument.test_result")
+        String routingKey = "instrument.test_result";
 
+        try {
+            TestResultPublishedEvent event = TestResultPublishedEvent.builder()
+                    .instrumentId(sample.getInstrumentId())
+                    .testOrderId(sample.getTestOrderId())
+                    .barcode(sample.getBarcode())
+                    .hl7Message(hl7Message)
+                    .rawResultData(rawResults)
+                    .publishedAt(LocalDateTime.now())
+                    .build();
 
-        PublishStatus publishStatus = (publishedToTestOrder )
-                ? PublishStatus.SENT
-                : PublishStatus.FAILED;
+            rabbitTemplate.convertAndSend(
+                    RabbitMQConfig.INSTRUMENT_EXCHANGE, // Exchange đã cấu hình
+                    routingKey,
+                    event
+            );
+            log.info("Successfully published TestResult event to RabbitMQ for Monitoring Service");
+        } catch (Exception e) {
+            log.error("Failed to publish TestResult event to RabbitMQ", e);
+            rawResult.setPublishStatus(PublishStatus.FAILED);
+            rawResult.setReadyForDeletion(false);
+            rawTestResultRepository.save(rawResult);
+            return;
+        }
+        // ------------------------------------------------------------------
 
-        rawResult.setPublishStatus(publishStatus);
-        rawResult.setReadyForDeletion(publishedToTestOrder);
-        rawTestResultRepository.save(rawResult);
+//        boolean publishedToTestOrder = publishToTestOrderService(hl7Message);
+//
+//
+//        PublishStatus publishStatus = (publishedToTestOrder)
+//                ? PublishStatus.SENT
+//                : PublishStatus.FAILED;
+//
+//        rawResult.setPublishStatus(publishStatus);
+//        rawResult.setReadyForDeletion(publishedToTestOrder);
+//        rawTestResultRepository.save(rawResult);
 
         workflowRepository.findById(sample.getWorkflowId()).ifPresent(workflow -> {
             workflow.setResultsPublished(true);
@@ -847,11 +880,11 @@ public class SampleAnalysisWorkflowServiceImpl implements SampleAnalysisWorkflow
         bloodSampleRepository.save(sample);
 
         workflowRepository.findById(sample.getWorkflowId()).ifPresent(workflow -> {
-        workflow.setStatus(WorkflowStatus.FAILED);
-        workflow.setErrorMessage("Failed to save RawTestResult for sample: " + sample.getBarcode());
-        workflowRepository.save(workflow);
-    });
-}
+            workflow.setStatus(WorkflowStatus.FAILED);
+            workflow.setErrorMessage("Failed to save RawTestResult for sample: " + sample.getBarcode());
+            workflowRepository.save(workflow);
+        });
+    }
 
     @Override
     public WorkflowResponse processNextCassette(String instrumentId) {

@@ -62,7 +62,7 @@ public class TestOrderMapper {
         }
 
         List<OrderComment> comments = orderCommentRepository
-                .findByTargetTypeAndTargetIdAndDeletedAtIsNullOrderByCreatedAtAsc(
+                .findByTargetTypeAndTargetIdAndParentIdIsNullOrderByCreatedAtAsc(
                         CommentTargetType.ORDER,
                         testOrder.getOrderId()
                 );
@@ -180,11 +180,21 @@ public class TestOrderMapper {
         if (orderComment == null) {
             return null;
         }
+        List<OrderCommentResponse> replyResponses = null;
+        List<OrderComment> replies = orderComment.getReplies();
+
+        if (replies != null && !replies.isEmpty()) {
+            replyResponses = replies.stream()
+                    .map(this::toSimpleCommentResponse)
+                    .collect(Collectors.toList());
+        }
+
         return OrderCommentResponse.builder()
                 .id(orderComment.getCommentId())
                 .authorId(orderComment.getAuthorUserId())
                 .content(orderComment.getContent())
                 .createdAt(orderComment.getCreatedAt())
+                .replies(replyResponses)
                 .build();
     }
 
@@ -198,5 +208,21 @@ public class TestOrderMapper {
         return orderComments.stream()
                 .map(this::toCommentResponse)
                 .collect(Collectors.toList());
+    }
+
+    /**
+     * Converts a reply comment to a simplified OrderCommentResponse (no nested replies).
+     */
+    private OrderCommentResponse toSimpleCommentResponse(OrderComment comment) {
+        if (comment == null) {
+            return null;
+        }
+
+        return OrderCommentResponse.builder()
+                .id(comment.getCommentId())
+                .authorId(comment.getAuthorUserId())
+                .content(comment.getContent())
+                .createdAt(comment.getCreatedAt())
+                .build();
     }
 }
