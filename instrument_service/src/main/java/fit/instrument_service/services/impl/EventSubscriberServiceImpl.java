@@ -7,10 +7,7 @@
 package fit.instrument_service.services.impl;
 
 import fit.instrument_service.configs.RabbitMQConfig;
-import fit.instrument_service.events.ConfigurationCreatedEvent;
-import fit.instrument_service.events.ConfigurationDeletedEvent;
-import fit.instrument_service.events.InstrumentActivatedEvent;
-import fit.instrument_service.events.InstrumentDeactivatedEvent;
+import fit.instrument_service.events.*;
 import fit.instrument_service.services.EventSubscriberService;
 import fit.instrument_service.services.InstrumentService;
 import lombok.RequiredArgsConstructor;
@@ -76,6 +73,21 @@ public class EventSubscriberServiceImpl implements EventSubscriberService {
         } catch (Exception e) {
             log.error("Error processing message from queue [{}]. Error: {}",
                     RabbitMQConfig.CONFIGURATION_DELETED_QUEUE, e.getMessage());
+        }
+    }
+
+    @RabbitListener(queues = RabbitMQConfig.CONFIGURATION_UPDATED_QUEUE)
+    public void handleConfigurationUpdated(ConfigurationUpdatedEvent event) {
+        try {
+            log.info("Received event from queue [{}]: {}", RabbitMQConfig.CONFIGURATION_UPDATED_QUEUE, event.getId());
+
+            // Gọi Service để xử lý logic nghiệp vụ cập nhật DB bên Instrument Service
+            // Giả sử method này tên là handleConfigurationUpdate
+            instrumentService.handleConfigurationUpdate(event);
+
+        } catch (Exception e) {
+            log.error("Error processing message from queue [{}]. Error: {}",
+                    RabbitMQConfig.CONFIGURATION_UPDATED_QUEUE, e.getMessage());
         }
     }
 }

@@ -18,6 +18,7 @@ import fit.iam_service.entities.Role;
 import fit.iam_service.entities.User;
 import fit.iam_service.enums.AuditAction;
 import fit.iam_service.enums.Gender;
+import fit.iam_service.exceptions.UnauthorizedException;
 import fit.iam_service.repositories.*;
 import fit.iam_service.security.UserDetailsImpl;
 import fit.iam_service.services.OtpService;
@@ -44,10 +45,7 @@ import java.time.Period;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 
 @Service
 @RequiredArgsConstructor
@@ -237,7 +235,8 @@ public class UserServiceImpl implements UserService {
                 u.getEmail(),
                 u.getPhone(),
                 u.getUsername(),
-                u.getFullName()
+                u.getFullName(),
+                u.getRole().getRoleCode()
         );
 
     }
@@ -279,6 +278,140 @@ public class UserServiceImpl implements UserService {
         auditLogRepository.save(log);
 
         return new EmailVerifyResponse(user.getUserId(), true, user.getUpdatedAt());
+    }
+
+    @Override
+    @Transactional
+    public CreateUserResponse createByAdmin(AdminCreateUserRequest req, String clientIp, String userAgent) {
+
+        // 0) Resolve actor and ensure ADMIN
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+
+        boolean hasAuth = auth != null
+                && auth.isAuthenticated()
+                && auth.getPrincipal() != null
+                && !"anonymousUser".equals(String.valueOf(auth.getPrincipal()));
+
+        if (!hasAuth) {
+            throw new UnauthorizedException("Only admin can create user");
+        }
+
+        boolean isAdmin = auth.getAuthorities() != null
+                && auth.getAuthorities().stream()
+                .anyMatch(a -> "ROLE_ADMIN".equalsIgnoreCase(a.getAuthority()));
+
+        if (!isAdmin) {
+            throw new UnauthorizedException("Only users with ROLE_ADMIN can create new users");
+        }
+
+        String actorId = null;
+        if (auth.getPrincipal() instanceof UserDetailsImpl userDetails) {
+            actorId = userDetails.getId();
+        } else {
+            actorId = auth.getName();
+        }
+
+        // 1) Uniqueness validations
+        if (userRepository.existsByEmail(req.email().trim().toLowerCase()))
+            throw new IllegalArgumentException("Email already in use");
+
+        if (userRepository.existsByPhone(req.phone().trim()))
+            throw new IllegalArgumentException("Phone already in use");
+
+        if (userRepository.existsByIdentifyNumber(req.identifyNumber().trim()))
+            throw new IllegalArgumentException("Identify number already in use");
+
+        // 2) Cross-check Age vs DoB
+        LocalDate dob = parse(req.dateOfBirth());
+        int computedAge = Period.between(dob, LocalDate.now(ZoneOffset.UTC)).getYears();
+        if (!computedAgeEquals(req.age(), computedAge)) {
+            throw new IllegalArgumentException("Age does not match date of birth");
+        }
+
+        // 3) Resolve Role for admin-created user
+        String normalizedRole = normalizeRole(req.roleCode());
+        Role role = roleRepository.findByRoleCode(normalizedRole)
+                .orElseThrow(() -> new IllegalArgumentException("Role not found: " + normalizedRole));
+
+        // 4) Decrypt & validate password
+        String rawPassword = "P@ssword123";
+
+        // 5) Build new User
+        User u = new User();
+        u.setUsername(generateUsername(req.fullName(), req.email()));
+        u.setEmail(req.email().trim().toLowerCase());
+        u.setPhone(req.phone().trim());
+        u.setFullName(req.fullName().trim());
+        u.setIdentifyNumber(req.identifyNumber().trim());
+        u.setGender(Gender.valueOf(req.gender().trim().toUpperCase()));
+        u.setAddress(req.address().trim());
+        u.setDateOfBirth(dob);
+        u.setPasswordHash(passwordEncoder.encode(rawPassword));
+        u.setRole(role);
+        u.setCreatedBy(actorId);
+
+        userRepository.saveAndFlush(u);
+
+        // 6) Save password history
+        PasswordHistory ph = PasswordHistory.builder()
+                .user(u)
+                .oldPasswordHash(u.getPasswordHash())
+                .changedAt(LocalDateTime.now(ZoneOffset.UTC))
+                .changedBy(actorId)
+                .build();
+        pwdHistoryRepository.save(ph);
+
+        // 7) Audit Log
+        AuditLog log = AuditLog.builder()
+                .actorId(actorId)
+                .targetId(u.getUserId())
+                .entity("USER")
+                .action(AuditAction.CREATE_USER)
+                .detailsJson(buildAfterJson(u))
+                .ip(clientIp)
+                .userAgent(userAgent)
+                .build();
+        auditLogRepository.save(log);
+
+        // 8) Response
+        return new CreateUserResponse(
+                u.getUserId(),
+                u.getEmail(),
+                u.getPhone(),
+                u.getUsername(),
+                u.getFullName(),
+                u.getRole().getRoleCode()
+        );
+    }
+
+    private String generateUsername(String fullName, String email) {
+
+        String rawBase;
+
+        if (fullName != null && !fullName.isBlank()) {
+            rawBase = removeAccent(fullName).toLowerCase(); // <--- FIX
+        } else {
+            rawBase = email.substring(0, email.indexOf("@")).toLowerCase();
+        }
+
+        String base = rawBase.replaceAll("[^a-z0-9]", "");
+
+        if (base.isBlank()) {
+            base = "user";
+        }
+
+        String username = base + String.format("%04d", new Random().nextInt(10000));
+
+        while (userRepository.existsByUsername(username)) {
+            username = base + String.format("%04d", new Random().nextInt(10000));
+        }
+
+        return username;
+    }
+
+    public static String removeAccent(String s) {
+        s = java.text.Normalizer.normalize(s, java.text.Normalizer.Form.NFD);
+        return s.replaceAll("\\p{M}", "");
     }
 
     @Override

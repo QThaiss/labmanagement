@@ -9,13 +9,11 @@ package fit.instrument_service.services.impl;
 import feign.FeignException;
 import fit.instrument_service.client.WarehouseFeignClient;
 import fit.instrument_service.client.dtos.ReagentLotStatusResponse;
+import fit.instrument_service.configs.RabbitMQConfig;
 import fit.instrument_service.dtos.request.ChangeInstrumentModeRequest;
 import fit.instrument_service.dtos.request.InstallReagentRequest;
 import fit.instrument_service.dtos.request.ModifyReagentStatusRequest;
-import fit.instrument_service.dtos.response.ApiResponse;
-import fit.instrument_service.dtos.response.InstrumentReagentResponse;
-import fit.instrument_service.dtos.response.InstrumentResponse;
-import fit.instrument_service.dtos.response.VendorResponse;
+import fit.instrument_service.dtos.response.*;
 import fit.instrument_service.embedded.Vendor;
 import fit.instrument_service.entities.Configuration;
 import fit.instrument_service.entities.Instrument;
@@ -25,6 +23,8 @@ import fit.instrument_service.enums.AuditAction;
 import fit.instrument_service.enums.InstrumentMode;
 import fit.instrument_service.enums.InstrumentStatus;
 import fit.instrument_service.enums.ReagentStatus;
+import fit.instrument_service.events.*;
+import fit.instrument_service.enums.*;
 import fit.instrument_service.events.ConfigurationCreatedEvent;
 import fit.instrument_service.events.ConfigurationDeletedEvent;
 import fit.instrument_service.events.InstrumentActivatedEvent;
@@ -37,17 +37,16 @@ import fit.instrument_service.repositories.InstrumentReagentRepository;
 import fit.instrument_service.repositories.InstrumentRepository;
 import fit.instrument_service.services.AuditLogService;
 import fit.instrument_service.services.InstrumentService;
+import fit.instrument_service.utils.SecurityUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.amqp.rabbit.annotation.RabbitListener;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
+import java.util.*;
 
 /*
  * @description: Implementation of InstrumentService for managing Instruments.
@@ -357,30 +356,43 @@ public class InstrumentServiceImpl implements InstrumentService {
         String configId = event.getId();
         log.info("Handling ConfigurationCreatedEvent for ID: {}", configId);
 
-        // Kiểm tra xem ID đã tồn tại chưa
+        // Nếu Config đã tồn tại → bỏ qua
         if (configurationRepository.existsById(configId)) {
             log.warn("Configuration (sync) with ID: {} already exists. Skipping creation.", configId);
             return;
         }
 
-        // --- Xử lý Mapping ---
-        // Do model 2 bên khác nhau, ta map các trường của warehouse_service
-        // vào trường 'settings' của instrument_service.
-        Map<String, Object> settings = new HashMap<>();
-        settings.put("dataType", event.getDataType());
-        settings.put("value", event.getValue());
-        settings.put("description", event.getDescription());
+        // --- Mapping settings ---
+        // Vì Warehouse gửi settings = Map<String, Object>
+        // nên ta giữ nguyên 100% (không cần bóc dataType/value nữa)
+        Map<String, Object> settings = event.getSettings();
 
-        // Tạo entity Configuration của instrument_service
+        // --- Tạo Configuration mới ---
         Configuration newConfig = new Configuration();
         newConfig.setId(event.getId());
         newConfig.setName(event.getName());
+
+        // Map configType (String) → enum ConfigurationType
+        if (event.getConfigType() != null) {
+            try {
+                newConfig.setConfigType(ConfigurationType.valueOf(event.getConfigType().toUpperCase()));
+            } catch (IllegalArgumentException ex) {
+                log.warn("Invalid configType '{}' — defaulting to null", event.getConfigType());
+                newConfig.setConfigType(null);
+            }
+        }
+
+        // Map các trường khác
+        newConfig.setInstrumentModel(event.getInstrumentModel());
+        newConfig.setInstrumentType(event.getInstrumentType());
+        newConfig.setVersion(event.getVersion());
+
+        // Settings JSON từ event (Map)
         newConfig.setSettings(settings);
 
-        // Các trường (configType, instrumentModel, v.v.) không có trong sự kiện
-        // sẽ được giữ là null (mặc định).
-
+        // Lưu vào MongoDB
         configurationRepository.save(newConfig);
+
         log.info("Successfully created configuration (sync) with ID: {}", configId);
     }
 
@@ -389,14 +401,158 @@ public class InstrumentServiceImpl implements InstrumentService {
         String configId = event.getConfigurationId();
         log.info("Handling ConfigurationDeletedEvent for ID: {}", configId);
 
-        // Tìm và xóa configuration trong DB của instrument_service
-        configurationRepository.findById(configId).ifPresent(config -> {
-            configurationRepository.delete(config);
-            log.info("Successfully deleted configuration (sync) with ID: {}", configId);
-        });
+        // Tìm configuration trong DB của instrument_service
+        configurationRepository.findById(configId).ifPresentOrElse(config -> {
+            config.setDeleted(true); // Lombok sinh setter là setDeleted cho field boolean isDeleted
+            config.setDeletedAt(LocalDateTime.now());
 
-        if (!configurationRepository.existsById(configId)) {
+            configurationRepository.save(config); // Lưu lại thay đổi cập nhật trạng thái
+
+            log.info("Successfully soft-deleted configuration (sync) with ID: {}", configId);
+        }, () -> {
             log.warn("Configuration (sync) with ID: {} not found. No action taken.", configId);
+        });
+    }
+
+    @Override
+    @Transactional
+    public void handleConfigurationUpdate(ConfigurationUpdatedEvent event) {
+        String configId = event.getId();
+        log.info("Handling ConfigurationUpdatedEvent for ID: {}", configId);
+
+        // 1. Tìm cấu hình trong DB của instrument_service
+        Optional<Configuration> existingConfigOpt = configurationRepository.findById(configId);
+
+        if (existingConfigOpt.isEmpty()) {
+            log.warn("Configuration (sync) with ID: {} not found. Update skipped.", configId);
+            return;
         }
+
+        Configuration existingConfig = existingConfigOpt.get();
+
+        // 2. Cập nhật thông tin từ Event
+        // Lưu ý: Chỉ cập nhật các trường có thể thay đổi từ Warehouse Service
+        boolean isUpdated = false;
+
+        if (event.getVersion() != null && !event.getVersion().equals(existingConfig.getVersion())) {
+            existingConfig.setVersion(event.getVersion());
+            isUpdated = true;
+        }
+
+        if (event.getSettings() != null) {
+            existingConfig.setSettings(event.getSettings());
+            isUpdated = true;
+        }
+
+        // Nếu tên có thay đổi (tùy chọn)
+        if (event.getName() != null && !event.getName().equals(existingConfig.getName())) {
+            existingConfig.setName(event.getName());
+            isUpdated = true;
+        }
+
+        // 3. Lưu lại nếu có thay đổi
+        if (isUpdated) {
+            existingConfig.setUpdatedAt(LocalDateTime.now());
+            configurationRepository.save(existingConfig);
+            log.info("Successfully updated configuration (sync) with ID: {}", configId);
+        } else {
+            log.info("No changes detected for configuration (sync) with ID: {}", configId);
+        }
+    }
+
+    @Override
+    public SyncConfigurationResponse syncUpConfiguration(String instrumentId) {
+        // Tìm Instrument
+        Instrument instrument = instrumentRepository.findById(instrumentId)
+                .orElseThrow(() -> new NotFoundException("Instrument not found with id: " + instrumentId));
+
+        // Kiểm tra model/type
+        if (!StringUtils.hasText(instrument.getType()) || !StringUtils.hasText(instrument.getModel())) {
+            throw new IllegalArgumentException("Instrument model/type is required to sync configurations");
+        }
+
+        // Tìm cấu hình chung và riêng
+        List<String> warnings = new ArrayList<>();
+
+        // Cấu hình chung
+        Optional<Configuration> generalConfigOpt = configurationRepository
+                .findTopByConfigTypeOrderByVersionDesc(ConfigurationType.GENERAL);
+
+        // Cấu hình chung không tìm thấy
+        Configuration generalConfig = generalConfigOpt.orElse(null);
+        if (generalConfig == null) {
+            String warning = "General configuration is missing and could not be applied.";
+            warnings.add(warning);
+            log.warn("{} Instrument ID: {}", warning, instrumentId);
+        }
+
+        // Cấu hình riêng
+        Optional<Configuration> specificConfigOpt = configurationRepository
+                .findTopByConfigTypeAndInstrumentModelAndInstrumentTypeOrderByVersionDesc(
+                        ConfigurationType.SPECIFIC,
+                        instrument.getModel(),
+                        instrument.getType()
+                );
+
+        // Nếu không tìm thấy theo model + type, thử chỉ theo type
+        if (specificConfigOpt.isEmpty()) {
+            specificConfigOpt = configurationRepository
+                    .findTopByConfigTypeAndInstrumentTypeOrderByVersionDesc(
+                            ConfigurationType.SPECIFIC,
+                            instrument.getType()
+                    );
+        }
+
+        // Cấu hình riêng không tìm thấy
+        Configuration specificConfig = specificConfigOpt.orElse(null);
+
+        // Nếu vẫn không tìm thấy, ghi cảnh báo
+        if (specificConfig == null) {
+            String warning = "Specific configuration matching instrument type/model is missing.";
+            warnings.add(warning);
+            log.warn("{} Instrument ID: {}, type: {}, model: {}", warning, instrumentId, instrument.getType(), instrument.getModel());
+        }
+
+        // Áp dụng cấu hình chung
+        Map<String, Object> generalSettings = generalConfig != null && generalConfig.getSettings() != null
+                ? new HashMap<>(generalConfig.getSettings())
+                : new HashMap<>();
+
+        // Áp dụng cấu hình riêng
+        Map<String, Object> specificSettings = specificConfig != null && specificConfig.getSettings() != null
+                ? new HashMap<>(specificConfig.getSettings())
+                : new HashMap<>();
+
+        // Kết hợp cấu hình chung + riêng
+        Map<String, Object> appliedSettings = new HashMap<>();
+        appliedSettings.putAll(generalSettings);
+        appliedSettings.putAll(specificSettings);
+
+        // Cờ đồng bộ đầy đủ
+        boolean fullySynced = generalConfig != null && specificConfig != null;
+
+        // Ghi log kiểm toán nếu đồng bộ đầy đủ
+        if (fullySynced) {
+            Map<String, Object> auditDetails = Map.of(
+                    "performedBy", SecurityUtils.getCurrentUserId(),
+                    "generalConfigId", generalConfig.getId(),
+                    "specificConfigId", specificConfig.getId(),
+                    "appliedAt", LocalDateTime.now()
+            );
+            auditLogService.logAction(AuditAction.SYNC_UP_CONFIGURATION, instrumentId, "Instrument", auditDetails);
+        }
+
+        return SyncConfigurationResponse.builder()
+                .instrumentId(instrumentId)
+                .instrumentModel(instrument.getModel())
+                .instrumentType(instrument.getType())
+                .generalConfigId(generalConfig != null ? generalConfig.getId() : null)
+                .specificConfigId(specificConfig != null ? specificConfig.getId() : null)
+                .generalSettings(generalSettings.isEmpty() ? null : generalSettings)
+                .specificSettings(specificSettings.isEmpty() ? null : specificSettings)
+                .appliedSettings(appliedSettings.isEmpty() ? null : appliedSettings)
+                .fullySynced(fullySynced)
+                .warnings(warnings.isEmpty() ? null : warnings)
+                .build();
     }
 }

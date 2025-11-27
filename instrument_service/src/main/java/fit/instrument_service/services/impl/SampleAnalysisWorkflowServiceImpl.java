@@ -538,7 +538,7 @@ public class SampleAnalysisWorkflowServiceImpl implements SampleAnalysisWorkflow
         } else {
             value = 1 + random.nextDouble() * 10;
         }
-        return Double.parseDouble(formatResultValue(value));
+        return Double.parseDouble(formatResultValue(value).replace(",", "."));
     }
 
     // Hàm chọn dải tham số phù hợp với giới tính

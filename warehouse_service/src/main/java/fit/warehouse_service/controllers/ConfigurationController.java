@@ -102,19 +102,21 @@ public class ConfigurationController {
             @RequestParam(name = "search", required = false)
             String search,
 
-            @RequestParam(name = "dataType", required = false)
-            DataType dataType,
+            // Cập nhật: Thay đổi từ DataType (Enum) sang String configType
+            @RequestParam(name = "configType", required = false)
+            String configType,
 
             @RequestParam(name = "startDate", required = false)
-            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) // yyyy-MM-dd
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
             LocalDate startDate,
 
             @RequestParam(name = "endDate", required = false)
             @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
             LocalDate endDate
     ) {
+        // Truyền configType dạng String vào service
         PageResponse<ConfigurationResponse> response = configurationService.getAllConfigurations(
-                page, size, sort, search, dataType, startDate, endDate
+                page, size, sort, search, configType, startDate, endDate
         );
 
         return ResponseEntity.ok(ApiResponse.success(response, "Fetched configurations successfully."));

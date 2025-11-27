@@ -14,6 +14,7 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 import java.io.Serializable;
+import java.util.Map;
 
 @Data
 @NoArgsConstructor
@@ -21,7 +22,10 @@ import java.io.Serializable;
 public class ConfigurationCreatedEvent implements Serializable {
     private String id;
     private String name;
-    private String dataType;
-    private String value;
+    private String configType;      // Mới
+    private String instrumentModel; // Mới
+    private String instrumentType;  // Mới
+    private String version;         // Mới
+    private Map<String, Object> settings; // Thay thế cho value/dataType
     private String description;
 }

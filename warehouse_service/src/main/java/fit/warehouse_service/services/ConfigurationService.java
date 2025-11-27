@@ -49,12 +49,11 @@ public interface ConfigurationService {
      * @param size      Kích thước trang.
      * @param sort      Mảng sắp xếp (ví dụ: ["name,asc", "createdAt,desc"]).
      * @param search    Từ khóa tìm kiếm trong tên hoặc mô tả.
-     * @param dataType  Lọc theo loại dữ liệu (nếu có).
      * @param startDate Lọc theo ngày tạo bắt đầu (nếu có).
      * @param endDate   Lọc theo ngày tạo kết thúc (nếu có).
      * @return Trang kết quả chứa danh sách cấu hình.
      */
-    PageResponse<ConfigurationResponse> getAllConfigurations(int page, int size, String[] sort, String search, DataType dataType, LocalDate startDate, LocalDate endDate);
+    PageResponse<ConfigurationResponse> getAllConfigurations(int page, int size, String[] sort, String search, String configType, LocalDate startDate, LocalDate endDate);
 
     /**
      * Lấy chi tiết một cấu hình theo ID.

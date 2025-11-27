@@ -29,4 +29,6 @@ public interface UserService {
     UserDetailResponse viewDetail(User authUser, String targetUserId, String clientIp, String userAgent);
 
     EmailVerifyResponse verifyEmail(EmailVerifyRequest req, String clientIp, String userAgent);
+
+    CreateUserResponse createByAdmin(AdminCreateUserRequest req, String clientIp, String userAgent);
 }

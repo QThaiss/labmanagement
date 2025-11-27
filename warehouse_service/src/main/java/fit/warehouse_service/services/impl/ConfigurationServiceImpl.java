@@ -9,22 +9,23 @@ package fit.warehouse_service.services.impl;/*
  * @version: 1.0
  */
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import fit.warehouse_service.constants.SortFields;
 import fit.warehouse_service.dtos.request.CreateConfigurationRequest;
 import fit.warehouse_service.dtos.request.ModifyConfigurationRequest;
-import fit.warehouse_service.dtos.response.FilterInfo;
 import fit.warehouse_service.dtos.response.ConfigurationResponse;
+import fit.warehouse_service.dtos.response.FilterInfo;
 import fit.warehouse_service.dtos.response.PageResponse;
 import fit.warehouse_service.entities.ConfigurationSetting;
-import fit.warehouse_service.enums.DataType;
 import fit.warehouse_service.enums.WarehouseActionType;
 import fit.warehouse_service.events.ConfigurationCreatedEvent;
 import fit.warehouse_service.events.ConfigurationDeletedEvent;
+import fit.warehouse_service.events.ConfigurationUpdatedEvent;
 import fit.warehouse_service.exceptions.DuplicateResourceException;
 import fit.warehouse_service.exceptions.NotFoundException;
 import fit.warehouse_service.exceptions.ResourceNotFoundException;
-import fit.warehouse_service.exceptions.ValidateValueFormatException;
 import fit.warehouse_service.mappers.ConfigurationMapper;
 import fit.warehouse_service.repositories.ConfigurationSettingRepository;
 import fit.warehouse_service.services.ConfigurationService;
@@ -45,7 +46,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
-import java.util.Objects;
+import java.util.Map;
 
 @Service
 @RequiredArgsConstructor
@@ -57,6 +58,7 @@ public class ConfigurationServiceImpl implements ConfigurationService {
     private final ConfigurationMapper configurationMapper;
     private final ConfigurationSpecification configurationSpecification;
     private final EventPublisherService eventPublisherService;
+    private final ObjectMapper objectMapper; // Inject ObjectMapper
 
     @Override
     @Transactional
@@ -67,70 +69,74 @@ public class ConfigurationServiceImpl implements ConfigurationService {
         }
 
         ConfigurationSetting newSetting = configurationMapper.toEntity(request);
-
         ConfigurationSetting savedSetting = configurationSettingRepository.save(newSetting);
+
         log.info("Successfully created configuration with id: {}", savedSetting.getId());
 
-        // Ghi log (đã có)
+        // Ghi log audit
         String currentUserId = SecurityUtils.getCurrentUserId();
         logService.logEvent(
                 WarehouseActionType.CONFIG_CREATED,
                 savedSetting.getId(),
-                "Configuration created: " + savedSetting.getName() + " (ID: " + savedSetting.getId() + ")",
+                "Configuration created: " + savedSetting.getName() + " (" + savedSetting.getConfigType() + ")",
                 currentUserId
         );
 
-        // Publish event (đã có)
+        // Publish event - Sử dụng Map settings từ request để gửi đi
         ConfigurationCreatedEvent event = new ConfigurationCreatedEvent(
                 savedSetting.getId(),
                 savedSetting.getName(),
-                savedSetting.getDataType().name(), // Gửi dưới dạng String
-                savedSetting.getValue(),
+                savedSetting.getConfigType(),
+                savedSetting.getInstrumentModel(),
+                savedSetting.getInstrumentType(),
+                savedSetting.getVersion(),
+                request.getSettings(), // Truyền Map settings
                 savedSetting.getDescription()
         );
         eventPublisherService.publishConfigurationCreated(event);
+
         return configurationMapper.toResponse(savedSetting);
     }
 
     @Override
     @Transactional
     public ConfigurationResponse modifyConfiguration(String configurationId, ModifyConfigurationRequest request) {
-        // Kiểm tra tồn tại của configuration
+        // Kiểm tra tồn tại
         ConfigurationSetting existingConfig = configurationSettingRepository
                 .findByIdAndDeletedAtIsNull(configurationId)
                 .orElseThrow(() -> new NotFoundException(
                         "Configuration with ID '" + configurationId + "' not found or has been deleted."));
 
-        // Convert Object -> String JSON/primitive phù hợp để lưu
-        String convertedValue = convertValueToString(request.getNewValue(), existingConfig.getDataType());
+        // Convert Settings Map sang JSON String để so sánh và lưu
+        String newSettingsJson;
+        try {
+            newSettingsJson = objectMapper.writeValueAsString(request.getSettings());
+        } catch (JsonProcessingException e) {
+            throw new RuntimeException("Invalid settings format", e);
+        }
 
-        // Xác thực định dạng giá trị dựa trên kiểu dữ liệu
-        validateValueFormat(convertedValue, existingConfig.getDataType());
-
-        // Lưu trữ giá trị cũ để kiểm tra thay đổi và ghi log
-        String oldValue = existingConfig.getValue();
+        String oldSettingsJson = existingConfig.getSettings();
 
         // Kiểm tra xem giá trị có thực sự thay đổi không
-        if (Objects.equals(oldValue, request.getNewValue())) {
-            log.info("No modification applied for config {} — same value '{}'", existingConfig.getName(), oldValue);
+        boolean isSettingsChanged = !newSettingsJson.equals(oldSettingsJson);
+        boolean isVersionChanged = request.getVersion() != null && !request.getVersion().equals(existingConfig.getVersion());
+
+        if (!isSettingsChanged && !isVersionChanged) {
+            log.info("No modification applied for config {}", existingConfig.getName());
             return configurationMapper.toResponse(existingConfig);
         }
 
-        // Cập nhật giá trị mới và thông tin sửa đổi
-        existingConfig.setValue(convertedValue);
+        // Cập nhật
+        if (isSettingsChanged) existingConfig.setSettings(newSettingsJson);
+        if (isVersionChanged) existingConfig.setVersion(request.getVersion());
+
         existingConfig.setUpdatedAt(LocalDateTime.now());
         existingConfig.setUpdatedByUserId(SecurityUtils.getCurrentUserId());
 
         ConfigurationSetting updatedConfig = configurationSettingRepository.save(existingConfig);
 
-        // Ghi log sự kiện thay đổi cấu hình
-        String logDetails = logService.createConfigurationModifiedDetails(
-                updatedConfig,
-                oldValue,
-                convertedValue,
-                request.getModificationReason()
-        );
-
+        // Ghi log
+        String logDetails = "Modified config " + updatedConfig.getName() + ". Reason: " + request.getModificationReason();
         logService.logEvent(
                 WarehouseActionType.CONFIG_UPDATED,
                 updatedConfig.getId(),
@@ -138,20 +144,25 @@ public class ConfigurationServiceImpl implements ConfigurationService {
                 logDetails
         );
 
-        log.info("Successfully modified configuration with ID: {}. Old value: '{}', New value: '{}'",
-                updatedConfig.getId(), oldValue, request.getNewValue());
+        // Publish event update sang Instrument Service
+        ConfigurationUpdatedEvent event = new ConfigurationUpdatedEvent(
+                updatedConfig.getId(),
+                updatedConfig.getName(),
+                updatedConfig.getVersion(),
+                request.getSettings(), // Truyền Map settings mới nhất
+                request.getModificationReason()
+        );
+        eventPublisherService.publishConfigurationUpdated(event);
 
-        // Trả về response sau khi sửa đổi
         return configurationMapper.toResponseUpdate(updatedConfig);
     }
 
     @Override
     @Transactional(readOnly = true)
-    public PageResponse<ConfigurationResponse> getAllConfigurations(int page, int size, String[] sort, String search, DataType dataType, LocalDate startDate, LocalDate endDate) {
-        log.info("Retrieving all configurations with filters: search='{}', dataType='{}', startDate='{}', endDate='{}'",
-                search, dataType, startDate, endDate);
+    // Cập nhật tham số: thay DataType bằng String configType
+    public PageResponse<ConfigurationResponse> getAllConfigurations(int page, int size, String[] sort, String search, String configType, LocalDate startDate, LocalDate endDate) {
+        log.info("Retrieving configurations: search='{}', type='{}'", search, configType);
 
-        // Xây dựng đối tượng Sort hợp lệ
         Sort validSort = SortUtils.buildSort(
                 sort,
                 SortFields.CONFIGURATION_SORT_FIELDS,
@@ -160,18 +171,16 @@ public class ConfigurationServiceImpl implements ConfigurationService {
 
         Pageable pageable = PageRequest.of(page, size, validSort);
 
-        // Xây dựng Specification dựa trên các tiêu chí lọc
-        Specification<ConfigurationSetting> spec = configurationSpecification.build(search, dataType, startDate, endDate);
+        // Sử dụng Specification đã update
+        Specification<ConfigurationSetting> spec = configurationSpecification.build(search, configType, startDate, endDate);
 
-        // Truy vấn CSDL với phân trang và lọc
         Page<ConfigurationSetting> pageConfigs = configurationSettingRepository.findAll(spec, pageable);
-
         Page<ConfigurationResponse> dtoPage = pageConfigs.map(configurationMapper::toResponseUpdate);
 
-        // Tạo đối tượng FilterInfo để trả về thông tin lọc
         FilterInfo filterInfo = FilterInfo.builder()
                 .search(search)
-                .dataType(dataType)
+                .configType(configType)
+
                 .startDate(startDate)
                 .endDate(endDate)
                 .build();
@@ -182,85 +191,38 @@ public class ConfigurationServiceImpl implements ConfigurationService {
     @Override
     @Transactional(readOnly = true)
     public ConfigurationResponse getConfigurationById(String configurationId) {
-        // Tìm configuration theo ID và đảm bảo chưa bị xóa
         ConfigurationSetting configuration = configurationSettingRepository
                 .findByIdAndDeletedAtIsNull(configurationId)
                 .orElseThrow(() -> new NotFoundException(
-                        "Configuration with ID '" + configurationId + "' not found or has been deleted."));
+                        "Configuration with ID '" + configurationId + "' not found."));
 
-        // Trả về response
         return configurationMapper.toResponseUpdate(configuration);
-    }
-
-    // Phương thức để chuyển đổi Object newValue thành String phù hợp dựa trên DataType
-    private String convertValueToString(Object newValue, DataType dataType) {
-        if (newValue == null)
-            throw new ValidateValueFormatException("New value cannot be null");
-
-        try {
-            ObjectMapper mapper = new ObjectMapper();
-
-            return switch (dataType) {
-                case INTEGER, BOOLEAN -> String.valueOf(newValue);
-                case JSON -> mapper.writeValueAsString(newValue);
-                case STRING -> newValue.toString();
-                default -> throw new ValidateValueFormatException("Unsupported data type: " + dataType);
-            };
-        } catch (Exception e) {
-            throw new ValidateValueFormatException("Failed to convert newValue for data type " + dataType + ": " + e.getMessage());
-        }
-    }
-
-    // Phương thức để xác thực định dạng giá trị dựa trên kiểu dữ liệu
-    private void validateValueFormat(String value, DataType dataType) {
-        try {
-            switch (dataType) {
-                case INTEGER:
-                    Integer.parseInt(value);
-                    break;
-                case BOOLEAN:
-                    if (!"true".equalsIgnoreCase(value) && !"false".equalsIgnoreCase(value)) {
-                        throw new ValidateValueFormatException("Data type BOOLEAN must be 'true' or 'false'.");
-                    }
-                    break;
-                case JSON:
-                    try {
-                        new ObjectMapper().readTree(value); // kiểm tra parse JSON hợp lệ
-                    } catch (Exception e) {
-                        throw new ValidateValueFormatException("Malformed JSON: " + e.getMessage());
-                    }
-                    break;
-                default:
-                    throw new ValidateValueFormatException("Unsupported data type: " + dataType);
-            }
-        } catch (NumberFormatException e) {
-            throw new ValidateValueFormatException("Invalid " + dataType.name().toLowerCase() + " format: " + value);
-        }
     }
 
     @Override
     @Transactional
     public void deleteConfiguration(String id) {
-        log.info("Attempting to delete configuration with id: {}", id);
-
-        // 1. & 2. Kiểm tra cấu hình phải tồn tại
         ConfigurationSetting configuration = configurationSettingRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Configuration with id " + id + " not found."));
 
-        // 3. Xóa cấu hình
-        configurationSettingRepository.delete(configuration);
+        // Soft delete logic (hoặc hard delete tùy policy)
+        // Ở đây repository dùng delete() là hard delete, nếu muốn soft delete cần setDeletedAt
+        configuration.setDeletedAt(LocalDateTime.now());
+        configuration.setDeleted(true);
+        configurationSettingRepository.save(configuration);
+
         log.info("Successfully deleted configuration with id: {}", id);
 
-        // 4. Ghi lại log hành động (Audit Trail)
-        String currentUserId = SecurityUtils.getCurrentUserId();
         logService.logEvent(
-                WarehouseActionType.CONFIG_DELETED, // Sử dụng enum
+                WarehouseActionType.CONFIG_DELETED,
                 id,
-                "Configuration deleted: " + configuration.getName() + " (ID: " + id + ")",
-                currentUserId
+                "Configuration deleted: " + configuration.getName(),
+                SecurityUtils.getCurrentUserId()
         );
 
-        // 5. Gửi sự kiện để đồng bộ với các service khác
         eventPublisherService.publishConfigurationDeleted(new ConfigurationDeletedEvent(id));
     }
+
+    // Các hàm helper cũ (convertValueToString, validateValueFormat) đã được loại bỏ
+    // vì logic validation đã được chuyển sang Jackson ObjectMapper và DTO validation
 }

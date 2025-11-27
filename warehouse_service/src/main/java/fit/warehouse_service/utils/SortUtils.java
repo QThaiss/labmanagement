@@ -28,14 +28,15 @@ public class SortUtils {
         List<Sort.Order> orders = new ArrayList<>();
 
         if (sort != null && sort.length > 0) {
-            // Handle case where parameters might be split by comma
-            if (sort.length == 2 && !sort[1].contains(",") &&
+            // Handle case where parameters might be split by comma by Spring default behavior
+            if (sort.length == 2 && !sort[1].contains(",") && !sort[1].contains(":") &&
                     ("asc".equalsIgnoreCase(sort[1]) || "desc".equalsIgnoreCase(sort[1]))) {
-                // Case: ?sort=fullName,desc gets parsed as ["fullName", "desc"]
+                // Case: ?sort=fullName,desc gets parsed by Spring as ["fullName", "desc"]
+                // We join them back to process uniformly
                 String sortParam = sort[0] + "," + sort[1];
                 processSort(sortParam, orders, allowedFields);
             } else {
-                // Normal case: each element is complete "property,direction"
+                // Normal case: each element is complete "property,direction" or "property:direction"
                 for (String param : sort) {
                     processSort(param, orders, allowedFields);
                 }
@@ -50,12 +51,12 @@ public class SortUtils {
 
     // Helper method to process individual sort parameter
     private void processSort(String sortParam, List<Sort.Order> orders, Set<String> allowedFields) {
-        String[] parts = sortParam.split(",");
+        // CẬP NHẬT: Hỗ trợ tách bằng cả dấu phẩy (,) và dấu hai chấm (:)
+        String[] parts = sortParam.split("[,:]");
         String property = parts[0].trim();
 
         // Check if this is a valid property field
         if (!allowedFields.contains(property)) {
-            // Nếu trường không hợp lệ, ném ra lỗi ngay lập tức
             throw new InvalidSortFieldException(
                     String.format("Sort field '%s' is not supported. Allowed fields are: %s", property, allowedFields)
             );

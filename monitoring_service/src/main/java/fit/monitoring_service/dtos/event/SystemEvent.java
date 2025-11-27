@@ -1,0 +1,32 @@
+/*
+ * @ (#) SystemEvent.java    1.0    25/11/2025
+ * Copyright (c) 2025 IUH. All rights reserved.
+ */
+package fit.monitoring_service.dtos.event;/*
+ * @description:
+ * @author: Bao Thong
+ * @date: 25/11/2025
+ * @version: 1.0
+ */
+
+import lombok.AllArgsConstructor;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+import java.time.LocalDateTime;
+import java.util.Map;
+
+@Data
+@NoArgsConstructor
+@AllArgsConstructor
+public class SystemEvent {
+    private String eventCode;      // VD: E_00001
+    private String action;         // VD: Create User
+    private String message;        // Nội dung thông báo
+    private String sourceService;  // Service gửi
+    private String operator;       // Username hoặc UserID
+    private Map<String, Object> details; // Dữ liệu chi tiết
+    private String ipAddress;
+    private String userAgent;
+    private LocalDateTime timestamp;
+}

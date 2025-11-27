@@ -6,9 +6,8 @@ import fit.test_order_service.client.IamFeignClient;
 import fit.test_order_service.client.PatientMedicalRecordFeignClient;
 import fit.test_order_service.client.WarehouseFeignClient;
 import fit.test_order_service.client.dtos.PatientMedicalRecordInternalResponse;
-import fit.test_order_service.client.dtos.ReagentDeductionRequest;
-import fit.test_order_service.client.dtos.ReagentDeductionResponse;
 import fit.test_order_service.client.dtos.UserInternalResponse;
+import fit.test_order_service.dtos.event.SystemEvent;
 import fit.test_order_service.dtos.request.*;
 import fit.test_order_service.dtos.response.*;
 import fit.test_order_service.entities.*;
@@ -76,6 +75,8 @@ public class TestOrderServiceImpl implements TestOrderService {
     private final TestTypeService testTypeService;
     private final WarehouseFeignClient warehouseFeignClient;
 
+    private final EventLogPublisher eventLogPublisher;
+
     @Override
     @Transactional
     public TestOrderResponse createTestOrder(CreateTestOrderRequest request) {
@@ -117,6 +118,15 @@ public class TestOrderServiceImpl implements TestOrderService {
 
         // 8. Ghi log sự kiện CREATED
         orderEventLogService.logEvent(savedTestOrder, EventType.CREATE, "Test order created for medical record: " + savedTestOrder.getMedicalRecordCode());
+
+        eventLogPublisher.publishEvent(SystemEvent.builder()
+                .eventCode("E_00001")
+                .action("Create Test Order")
+                .message("Created test order " + savedTestOrder.getOrderId())
+                .sourceService("TEST_ORDER_SERVICE")
+                .operator(SecurityUtils.getCurrentUserId()) // Hàm lấy user hiện tại
+                .details(Map.of("testOrderId", savedTestOrder.getOrderId(), "medicalRecordId", savedTestOrder.getMedicalRecordId()))
+                .build());
 
         return testOrderMapper.toResponse(savedTestOrder, testTypeResponse);
     }
@@ -307,6 +317,15 @@ public class TestOrderServiceImpl implements TestOrderService {
         // 4. Lưu lại thay đổi của TestOrder
         testOrderRepository.save(testOrder);
 
+        eventLogPublisher.publishEvent(SystemEvent.builder()
+                .eventCode("E_00003")
+                .action("Delete Test Order")
+                .message("Deleted test order " + id)
+                .sourceService("TEST_ORDER_SERVICE")
+                .operator(SecurityUtils.getCurrentUserId())
+                .details(Map.of("orderId", id))
+                .build());
+
         // 5. Ghi lại sự kiện DELETED vào log
         orderEventLogService.logEvent(testOrder, EventType.DELETE, "Test order with ID: " + id + " has been deleted.");
     }
@@ -441,6 +460,15 @@ public class TestOrderServiceImpl implements TestOrderService {
 
         // Save updated order
         TestOrder updatedOrder = testOrderRepository.save(existingOrder);
+
+        eventLogPublisher.publishEvent(SystemEvent.builder()
+                .eventCode("E_00002")
+                .action("Update Test Order")
+                .message("Updated test order " + orderCode)
+                .sourceService("TEST_ORDER_SERVICE")
+                .operator(SecurityUtils.getCurrentUserId())
+                .details(Map.of("orderCode", orderCode, "updates", request)) // Có thể log diff nếu cần
+                .build());
 
         // Log the update event
         orderEventLogService.logOrderUpdate(beforeUpdate, updatedOrder, EventType.UPDATE);
@@ -833,6 +861,15 @@ public class TestOrderServiceImpl implements TestOrderService {
 
                 logsToSave.add(logEntry);
                 adjustmentsCount++;
+
+                eventLogPublisher.publishEvent(SystemEvent.builder()
+                        .eventCode("E_00004")
+                        .action("Modify Test Result")
+                        .message("Modified results for order " + orderId)
+                        .sourceService("TEST_ORDER_SERVICE")
+                        .operator(SecurityUtils.getCurrentUserId())
+                        .details(Map.of("orderId", orderId, "updates", request))
+                        .build());
             }
 
             if (!logsToSave.isEmpty()) {
@@ -859,6 +896,15 @@ public class TestOrderServiceImpl implements TestOrderService {
                 mode, hl7Status, adjustmentsCount, request.getNote());
 
         orderEventLogService.logEvent(testOrder, eventType, logDetails);
+
+        eventLogPublisher.publishEvent(SystemEvent.builder()
+                .eventCode("E_00008")
+                .action("Review Test Order Results")
+                .message("Completed review for order " + orderId)
+                .sourceService("TEST_ORDER_SERVICE")
+                .operator(SecurityUtils.getCurrentUserId())
+                .details(Map.of("orderId", orderId, "status", "HUMAN_REVIEWED"))
+                .build());
 
         // 6. Trả về Response
         return ReviewTestOrderResponse.builder()

@@ -9,13 +9,14 @@ package fit.warehouse_service.dtos.request;/*
  * @version: 1.0
  */
 
-import fit.warehouse_service.enums.DataType;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 import lombok.Getter;
 import lombok.Setter;
+
+import java.util.Map;
 
 /**
  * DTO cho yêu cầu tạo mới một Configuration Setting.
@@ -32,11 +33,22 @@ public class CreateConfigurationRequest {
     )
     private String name;
 
+    @Size(max = 1000, message = "Description must not exceed 1000 characters.")
     private String description;
 
-    @NotNull(message = "Data type cannot be null.")
-    private DataType dataType;
+    // Các trường mới được thêm vào để khớp với Instrument Service (Req 3.6.3.1)
 
-    @Size(max = 2048, message = "Value must not exceed 2048 characters.")
-    private String value;
+    @NotBlank(message = "Configuration type is required (GENERAL/SPECIFIC).")
+    @Pattern(regexp = "^(GENERAL|SPECIFIC)$", message = "Configuration type must be either 'General' or 'Specific'.")
+    private String configType; // Tương ứng với ConfigurationType bên Instrument Service
+
+    private String instrumentModel; // Bắt buộc nếu configType là "Specific"
+
+    private String instrumentType;  // Bắt buộc nếu configType là "Specific"
+
+    @NotBlank(message = "Version is required.")
+    private String version;
+
+    @NotNull(message = "Settings cannot be null.")
+    private Map<String, Object> settings;
 }

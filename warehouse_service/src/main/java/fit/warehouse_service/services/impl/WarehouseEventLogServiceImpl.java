@@ -1,13 +1,8 @@
 /*
- * @ (#) WarehouseEventLogServiceImpl.java    1.0    29/10/2025
+ * @ (#) WarehouseEventLogServiceImpl.java    1.1    25/11/2025
  * Copyright (c) 2025 IUH. All rights reserved.
  */
-package fit.warehouse_service.services.impl;/*
- * @description:
- * @author: Bao Thong
- * @date: 29/10/2025
- * @version: 1.0
- */
+package fit.warehouse_service.services.impl;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -36,7 +31,6 @@ public class WarehouseEventLogServiceImpl implements WarehouseEventLogService {
 
     @Override
     public void logEvent(WarehouseActionType action, String entityId, String entityType, String details) {
-        // ... (no change in this method)
         try {
             WarehouseEventLog eventLog = new WarehouseEventLog();
             eventLog.setAction(action);
@@ -55,23 +49,21 @@ public class WarehouseEventLogServiceImpl implements WarehouseEventLogService {
         details.put("name", instrument.getName());
         details.put("status", instrument.getStatus().name());
 
-        // --- Add New Fields to Log ---
         details.put("ipAddress", instrument.getIpAddress());
         details.put("port", instrument.getPort());
-        if (instrument.getProtocolType() != null) { // Check if protocolType is set
+        if (instrument.getProtocolType() != null) {
             details.put("protocolType", instrument.getProtocolType().name());
         }
 
-        // --- Existing Fields ---
         if (instrument.getCompatibleReagents() != null) {
             details.put("compatibleReagentIds", instrument.getCompatibleReagents().stream()
-                    .map(reagent -> reagent.getId())
+                    .map(BaseEntity::getId)
                     .collect(Collectors.toSet()));
         }
 
         if (instrument.getConfigurations() != null) {
             details.put("configurationSettingIds", instrument.getConfigurations().stream()
-                    .map(config -> config.getId())
+                    .map(BaseEntity::getId)
                     .collect(Collectors.toSet()));
         }
 
@@ -152,9 +144,9 @@ public class WarehouseEventLogServiceImpl implements WarehouseEventLogService {
                     Map.entry("poNumber", history.getPoNumber()),
                     Map.entry("receiptDate", history.getReceiptDate() != null ? history.getReceiptDate().toString() : "N/A"),
                     Map.entry("expirationDate", history.getExpirationDate() != null ? history.getExpirationDate().toString() : "N/A"),
-                    Map.entry("receivedByUserId", history.getReceivedByUserId()), // Explicit receiver
-                    Map.entry("loggedByUserId", history.getCreatedByUserId()), // Audit user
-                    Map.entry("loggedAt", history.getCreatedAt() != null ? history.getCreatedAt().toString() : "N/A"), // Audit time
+                    Map.entry("receivedByUserId", history.getReceivedByUserId()),
+                    Map.entry("loggedByUserId", history.getCreatedByUserId()),
+                    Map.entry("loggedAt", history.getCreatedAt() != null ? history.getCreatedAt().toString() : "N/A"),
                     Map.entry("initialStorageLocation", history.getInitialStorageLocation()),
                     Map.entry("status", history.getStatus().name())
             );
@@ -187,14 +179,31 @@ public class WarehouseEventLogServiceImpl implements WarehouseEventLogService {
         }
     }
 
+    // --- Sửa lỗi tại đây ---
     @Override
     public String createConfigurationCreatedDetails(ConfigurationSetting config) {
         try {
             Map<String, Object> details = new HashMap<>();
             details.put("id", config.getId());
             details.put("name", config.getName());
-            details.put("value", config.getValue());
-            details.put("dataType", config.getDataType().name());
+
+            // Cập nhật: Thay thế các trường cũ (value, dataType) bằng trường mới
+            details.put("configType", config.getConfigType());
+            details.put("instrumentModel", config.getInstrumentModel());
+            details.put("instrumentType", config.getInstrumentType());
+            details.put("version", config.getVersion());
+
+            // Xử lý trường settings (JSON)
+            if (config.getSettings() != null) {
+                try {
+                    // Parse chuỗi JSON thành Object để log đẹp hơn (tránh bị escape string)
+                    details.put("settings", objectMapper.readTree(config.getSettings()));
+                } catch (Exception e) {
+                    // Fallback: log chuỗi raw nếu parse lỗi
+                    details.put("settings", config.getSettings());
+                }
+            }
+
             return objectMapper.writeValueAsString(details);
         } catch (JsonProcessingException e) {
             log.warn("Could not serialize config details for logging: {}", e.getMessage());
@@ -205,15 +214,17 @@ public class WarehouseEventLogServiceImpl implements WarehouseEventLogService {
     @Override
     public String createConfigurationModifiedDetails(
             ConfigurationSetting config,
-            String oldValue,
-            String newValue,
+            String oldValue, // Đây là JSON String của Settings cũ
+            String newValue, // Đây là JSON String của Settings mới
             String reason) {
 
         StringBuilder details = new StringBuilder();
         details.append("Configuration Modified - ");
         details.append("Name: ").append(config.getName()).append(", ");
-        details.append("Old Value: '").append(oldValue).append("', ");
-        details.append("New Value: '").append(newValue).append("'");
+
+        // Cập nhật label log cho phù hợp
+        details.append("Old Settings: '").append(oldValue).append("', ");
+        details.append("New Settings: '").append(newValue).append("'");
 
         if (StringUtils.hasText(reason)) {
             details.append(", Reason: ").append(reason);

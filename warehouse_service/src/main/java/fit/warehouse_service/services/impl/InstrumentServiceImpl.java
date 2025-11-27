@@ -19,6 +19,7 @@ import fit.warehouse_service.enums.ProtocolType;
 import fit.warehouse_service.enums.WarehouseActionType;
 import fit.warehouse_service.events.InstrumentActivatedEvent;
 import fit.warehouse_service.events.InstrumentDeactivatedEvent;
+import fit.warehouse_service.events.SystemEvent;
 import fit.warehouse_service.exceptions.AlreadyExistsException;
 import fit.warehouse_service.exceptions.DuplicateResourceException;
 import fit.warehouse_service.exceptions.NotFoundException;
@@ -27,6 +28,7 @@ import fit.warehouse_service.mappers.InstrumentMapper;
 import fit.warehouse_service.repositories.*;
 import fit.warehouse_service.services.*;
 import fit.warehouse_service.specifications.InstrumentSpecification;
+import fit.warehouse_service.utils.SecurityUtils;
 import fit.warehouse_service.utils.SortUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -40,10 +42,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
-import java.util.Comparator;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Set;
+import java.util.*;
 import java.util.stream.Collectors;
 
 /*
@@ -79,6 +78,8 @@ public class InstrumentServiceImpl implements InstrumentService {
     private final EventPublisherService eventPublisherService;
 
     private final VendorRepository vendorRepository;
+
+    private final EventLogPublisher eventLogPublisher;
 
     @Override
     @Transactional
@@ -241,6 +242,15 @@ public class InstrumentServiceImpl implements InstrumentService {
         log.info("Instrument {} has been activated. Status: {}",
                 savedInstrument.getId(), savedInstrument.getStatus());
 
+        eventLogPublisher.publishEvent(SystemEvent.builder()
+                .eventCode("E_00009")
+                .action("Activate Instrument")
+                .message("Instrument " + instrument.getName() + " activated")
+                .sourceService("WAREHOUSE_SERVICE")
+                .operator(SecurityUtils.getCurrentUserId())
+                .details(Map.of("instrumentId", request.getInstrumentId(), "status", "ACTIVE"))
+                .build());
+
         return InstrumentActivationResponse.builder()
                 .instrumentId(savedInstrument.getId())
                 .instrumentName(savedInstrument.getName())
@@ -305,6 +315,15 @@ public class InstrumentServiceImpl implements InstrumentService {
         );
 
         log.info("Instrument {} has been deactivated. Status: INACTIVE", savedInstrument.getId());
+
+        eventLogPublisher.publishEvent(SystemEvent.builder()
+                .eventCode("E_00009")
+                .action("Deactivate Instrument")
+                .message("Instrument " + instrument.getName() + " deactivated")
+                .sourceService("WAREHOUSE_SERVICE")
+                .operator(SecurityUtils.getCurrentUserId())
+                .details(Map.of("instrumentId", request.getInstrumentId(), "status", "INACTIVE"))
+                .build());
 
         return InstrumentActivationResponse.builder()
                 .instrumentId(savedInstrument.getId())
@@ -439,7 +458,7 @@ public class InstrumentServiceImpl implements InstrumentService {
 
     @Override
     @Transactional(readOnly = true)
-    public PageResponse<InstrumentResponse> getAllInstruments(int page, int size, String[] sort, String search, LocalDate startDate, LocalDate endDate) {
+    public PageResponse<InstrumentResponse> getAllInstruments(int page, int size, String[] sort, String search, String configType, LocalDate startDate, LocalDate endDate) {
         log.info("Fetching all instruments with filters: search='{}', startDate='{}', endDate='{}', page={}",
                 search, startDate, endDate, page);
 
@@ -464,13 +483,10 @@ public class InstrumentServiceImpl implements InstrumentService {
         // Tạo đối tượng FilterInfo để trả về thông tin lọc (sử dụng lại ConfigurationFilterInfo theo yêu cầu)
         FilterInfo filterInfo = FilterInfo.builder()
                 .search(search)
+                .configType(configType)
                 .startDate(startDate)
                 .endDate(endDate)
-                .dataType(null) // Như yêu cầu, không bao gồm dataType
                 .build();
-
-        log.info("Retrieved {} instruments.", dtoPage.getTotalElements());
-
         return PageResponse.from(dtoPage, filterInfo);
     }
 

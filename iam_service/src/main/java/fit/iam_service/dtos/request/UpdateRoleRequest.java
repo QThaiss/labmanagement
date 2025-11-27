@@ -2,11 +2,15 @@ package fit.iam_service.dtos.request;
 
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
 import lombok.Data;
 
 import java.util.List;
 
 @Data
+@Builder
+@AllArgsConstructor
 public class UpdateRoleRequest {
     @Size(max = 128, message = "Role name must be ≤ 128 characters")
     private String roleName;

@@ -170,6 +170,9 @@ public class InstrumentController {
             @RequestParam(name = "search", required = false)
             String search,
 
+            @RequestParam(name = "configType", required = false)
+            String configType,
+
             @RequestParam(name = "startDate", required = false)
             @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) // yyyy-MM-dd
             LocalDate startDate,
@@ -179,7 +182,7 @@ public class InstrumentController {
             LocalDate endDate
     ) {
         PageResponse<InstrumentResponse> response = instrumentService.getAllInstruments(
-                page, size, sort, search, startDate, endDate
+                page, size, sort, search, configType, startDate, endDate
         );
 
         String message = response.getTotalElements() > 0

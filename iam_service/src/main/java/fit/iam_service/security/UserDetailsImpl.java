@@ -37,7 +37,7 @@ public class UserDetailsImpl implements UserDetails {
     @JsonIgnore
     private String password;
 
-    private boolean isDeleted;
+    private Boolean isDeleted;
 
     private Collection<? extends GrantedAuthority> authorities;
 
@@ -48,7 +48,7 @@ public class UserDetailsImpl implements UserDetails {
     public UserDetailsImpl(String id,
                            String username,
                            String password,
-                           boolean isDeleted,
+                           Boolean isDeleted,
                            Collection<? extends GrantedAuthority> authorities,
                            String role,
                            List<String> privileges) {
@@ -120,6 +120,6 @@ public class UserDetailsImpl implements UserDetails {
 
     @Override
     public boolean isEnabled() {
-        return !isDeleted;
+        return isDeleted == null || !isDeleted;
     }
 }

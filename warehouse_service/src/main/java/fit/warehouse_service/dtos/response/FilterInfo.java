@@ -6,28 +6,25 @@
 
 package fit.warehouse_service.dtos.response;
 
-import com.fasterxml.jackson.annotation.JsonInclude;
-import fit.warehouse_service.enums.DataType;
 import lombok.Builder;
-import lombok.Data;
 
 import java.time.LocalDate;
 
+import lombok.Getter;
+import lombok.Setter;
 /*
  * @description: DTO for filtering configuration settings
  * @author: Tran Hien Vinh
  * @date:   03/11/2025
  * @version:    1.0
  */
-@Data
+
+@Getter
+@Setter
 @Builder
-@JsonInclude(JsonInclude.Include.NON_NULL)
 public class FilterInfo {
     private String search;
-
-    private DataType dataType;
-
+    private String configType;
     private LocalDate startDate;
-
     private LocalDate endDate;
 }

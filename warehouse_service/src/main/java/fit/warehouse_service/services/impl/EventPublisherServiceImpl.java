@@ -7,10 +7,7 @@
 package fit.warehouse_service.services.impl;
 
 import fit.warehouse_service.configs.RabbitMQConfig;
-import fit.warehouse_service.events.ConfigurationCreatedEvent;
-import fit.warehouse_service.events.ConfigurationDeletedEvent;
-import fit.warehouse_service.events.InstrumentActivatedEvent;
-import fit.warehouse_service.events.InstrumentDeactivatedEvent;
+import fit.warehouse_service.events.*;
 import fit.warehouse_service.services.EventPublisherService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -97,6 +94,23 @@ public class EventPublisherServiceImpl implements EventPublisherService {
         } catch (Exception e) {
             log.error("Failed to publish ConfigurationDeletedEvent for id: {}. Error: {}",
                     event.getConfigurationId(), e.getMessage());
+        }
+    }
+
+    @Override
+    public void publishConfigurationUpdated(ConfigurationUpdatedEvent event) {
+        try {
+            log.info("Publishing ConfigurationUpdatedEvent for id: {} | RoutingKey: {}",
+                    event.getId(), RabbitMQConfig.CONFIGURATION_UPDATED_ROUTING_KEY);
+
+            rabbitTemplate.convertAndSend(
+                    RabbitMQConfig.INSTRUMENT_EXCHANGE,
+                    RabbitMQConfig.CONFIGURATION_UPDATED_ROUTING_KEY,
+                    event
+            );
+        } catch (Exception e) {
+            log.error("Failed to publish ConfigurationUpdatedEvent for id: {}. Error: {}",
+                    event.getId(), e.getMessage());
         }
     }
 }

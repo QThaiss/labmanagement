@@ -17,6 +17,7 @@ public record CreateUserResponse(
         String email,
         String phone,
         String username,
-        String fullName
+        String fullName,
+        String roleCode
 ) {
 }

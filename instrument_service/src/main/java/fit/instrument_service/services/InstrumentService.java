@@ -11,6 +11,8 @@ import fit.instrument_service.dtos.request.InstallReagentRequest;
 import fit.instrument_service.dtos.request.ModifyReagentStatusRequest;
 import fit.instrument_service.dtos.response.InstrumentReagentResponse;
 import fit.instrument_service.dtos.response.InstrumentResponse;
+import fit.instrument_service.events.*;
+import fit.instrument_service.dtos.response.SyncConfigurationResponse;
 import fit.instrument_service.events.ConfigurationCreatedEvent;
 import fit.instrument_service.events.ConfigurationDeletedEvent;
 import fit.instrument_service.events.InstrumentActivatedEvent;
@@ -64,5 +66,18 @@ public interface InstrumentService {
      */
     void handleConfigurationDeletion(ConfigurationDeletedEvent event);
 
+    /**
+     * Xử lý logic nghiệp vụ khi nhận được sự kiện cập nhật cấu hình.
+     *
+     * @param event Sự kiện chứa thông tin cập nhật của cấu hình
+     */
+    void handleConfigurationUpdate(ConfigurationUpdatedEvent event);
 
+    /**
+     * Đồng bộ cấu hình (chung và riêng) cho thiết bị dựa trên model/type.
+     *
+     * @param instrumentId ID của thiết bị cần đồng bộ
+     * @return Thông tin cấu hình áp dụng kèm cảnh báo (nếu có)
+     */
+    SyncConfigurationResponse syncUpConfiguration(String instrumentId);
 }

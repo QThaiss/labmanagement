@@ -7,15 +7,21 @@
 package fit.instrument_service.services.impl;
 
 import fit.instrument_service.entities.InstrumentReagent;
+import fit.instrument_service.enums.AuditAction;
 import fit.instrument_service.enums.ReagentStatus;
+import fit.instrument_service.exceptions.BadRequestException;
+import fit.instrument_service.exceptions.NotFoundException;
 import fit.instrument_service.repositories.InstrumentReagentRepository;
+import fit.instrument_service.services.AuditLogService;
 import fit.instrument_service.services.ReagentCheckService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Map;
 
 /*
  * @description: Service kiểm tra hóa chất của thiết bị
@@ -28,6 +34,7 @@ import java.util.List;
 @Slf4j
 public class ReagentCheckServiceImpl implements ReagentCheckService {
     private final InstrumentReagentRepository instrumentReagentRepository;
+    private final AuditLogService auditLogService;
 
     private static final int MINIMUM_REAGENT_QUANTITY = 10;
 
@@ -67,4 +74,45 @@ public class ReagentCheckServiceImpl implements ReagentCheckService {
         log.info("Reagent levels are sufficient for instrument: {}", instrumentId);
         return true;
     }
+
+
+    @Override
+    @Transactional
+    public void uninstallReagent(String instrumentId, String instrumentReagentId, String reason) { //
+        log.info("Attempting to uninstall reagent lot {} from instrument {}", instrumentReagentId, instrumentId);
+
+        // 1. Tìm bản ghi InstrumentReagent
+        // Giả định các Exception (NotFoundException, BadRequestException) đã được import
+        InstrumentReagent instrumentReagent = instrumentReagentRepository.findById(instrumentReagentId)
+                .orElseThrow(() -> new NotFoundException("Instrument Reagent record not found with ID: " + instrumentReagentId));
+
+        // 2. Kiểm tra tính hợp lệ (bản ghi phải thuộc về máy này)
+        if (!instrumentReagent.getInstrumentId().equals(instrumentId)) {
+            log.warn("Instrument Reagent ID {} does not belong to Instrument ID {}", instrumentReagentId, instrumentId);
+            throw new BadRequestException("Instrument Reagent ID does not match the specified Instrument ID.");
+        }
+
+        // 3. Thực hiện gỡ bỏ (xóa bản ghi)
+        instrumentReagentRepository.delete(instrumentReagent);
+        log.info("Reagent lot {} successfully uninstalled from instrument {}. Record deleted.", instrumentReagentId, instrumentId);
+
+        // 4. Ghi log hành động
+        Map<String, Object> details = Map.of(
+                "action", "Uninstall Reagent",
+                "instrumentId", instrumentId,
+                "reagentLotNumber", instrumentReagent.getLotNumber(),
+                "reagentTypeName", instrumentReagent.getReagentName(),
+                "reason", reason != null ? reason : "No reason provided",
+                "remainingQuantity", instrumentReagent.getQuantity() // Log số lượng còn lại khi gỡ bỏ
+        );
+
+        // Sử dụng DELETE_REAGENT cho hành động uninstallation
+        auditLogService.logAction(
+                AuditAction.DELETE_REAGENT,
+                instrumentId,
+                "InstrumentReagent",
+                details
+        );
+    }
+
 }

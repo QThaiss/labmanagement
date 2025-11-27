@@ -7,49 +7,47 @@
 package fit.warehouse_service.specifications;
 
 import fit.warehouse_service.entities.ConfigurationSetting;
-import fit.warehouse_service.enums.DataType;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
 import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.List;
+import jakarta.persistence.criteria.Predicate;
 
-/*
- * @description: Specification builder for ConfigurationSetting entity
- * @author: Tran Hien Vinh
- * @date:   03/11/2025
- * @version:    1.0
- */
 @Component
 public class ConfigurationSpecification {
 
-    public Specification<ConfigurationSetting> build(String search, DataType dataType, LocalDate startDate, LocalDate endDate) {
-        // Loại bỏ các bản ghi đã bị xóa mềm
-        Specification<ConfigurationSetting> spec = (root, query, cb) -> cb.isNull(root.get("deletedAt"));
+    public Specification<ConfigurationSetting> build(String search, String configType, LocalDate startDate, LocalDate endDate) {
+        return (root, query, cb) -> {
+            List<Predicate> predicates = new ArrayList<>();
 
-        // Tìm kiếm theo từ khóa trong tên hoặc mô tả
-        if (StringUtils.hasText(search)) {
-            spec = spec.and((root, query, cb) ->
-                    cb.or(
-                            cb.like(cb.lower(root.get("name")), "%" + search.toLowerCase() + "%"),
-                            cb.like(cb.lower(root.get("description")), "%" + search.toLowerCase() + "%")
-                    ));
-        }
+            // 1. Search by Name or Instrument Model
+            if (StringUtils.hasText(search)) {
+                String searchLike = "%" + search.trim().toLowerCase() + "%";
+                Predicate namePredicate = cb.like(cb.lower(root.get("name")), searchLike);
+                Predicate modelPredicate = cb.like(cb.lower(root.get("instrumentModel")), searchLike);
+                predicates.add(cb.or(namePredicate, modelPredicate));
+            }
 
-        // Lọc theo dataType
-        if (dataType != null) {
-            spec = spec.and((root, query, cb) -> cb.equal(root.get("dataType"), dataType));
-        }
+            // 2. Filter by Config Type (General/Specific) - Thay cho DataType cũ
+            if (StringUtils.hasText(configType)) {
+                predicates.add(cb.equal(root.get("configType"), configType));
+            }
 
-        // Lọc theo khoảng ngày tạo
-        if (startDate != null) {
-            spec = spec.and((root, query, cb) -> cb.greaterThanOrEqualTo(root.get("createdAt"), startDate.atStartOfDay()));
-        }
+            // 3. Filter by Date Range (createdAt)
+            if (startDate != null) {
+                predicates.add(cb.greaterThanOrEqualTo(root.get("createdAt"), startDate.atStartOfDay()));
+            }
+            if (endDate != null) {
+                predicates.add(cb.lessThanOrEqualTo(root.get("createdAt"), endDate.atTime(23, 59, 59)));
+            }
 
-        if (endDate != null) {
-            spec = spec.and((root, query, cb) -> cb.lessThanOrEqualTo(root.get("createdAt"), endDate.atTime(23, 59, 59)));
-        }
+            // Exclude deleted records
+            predicates.add(cb.isNull(root.get("deletedAt")));
 
-        return spec;
+            return cb.and(predicates.toArray(new Predicate[0]));
+        };
     }
 }

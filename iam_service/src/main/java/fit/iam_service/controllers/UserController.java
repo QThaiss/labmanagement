@@ -166,4 +166,23 @@ public class UserController {
 
         return ResponseEntity.ok(ApiResponse.success("Xem thông tin tài khoản thành công.", data, http.getRequestURI()));
     }
+
+    @PostMapping("/admin")
+    @PreAuthorize("hasRole('ADMIN')")
+//    @PreAuthorize("hasAuthority('USER_CREATE')")
+    public ResponseEntity<ApiResponse<CreateUserResponse>> adminCreateUser(
+            @Valid @RequestBody AdminCreateUserRequest req,
+            @AuthenticationPrincipal UserDetailsImpl principal,
+            HttpServletRequest http
+    ) {
+        userRepository.findById(principal.getId())
+                .orElseThrow(() -> new IllegalArgumentException("Authenticated user not found"));
+
+        var data = userService.createByAdmin(req, IpAddress.clientIp(http), http.getHeader("User-Agent"));
+        return ResponseEntity.ok(ApiResponse.success(
+                "Tạo người dùng với vai trò thành công",
+                data,
+                http.getRequestURI()
+        ));
+    }
 }

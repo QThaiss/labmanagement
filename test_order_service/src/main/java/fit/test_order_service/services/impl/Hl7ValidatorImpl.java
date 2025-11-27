@@ -290,7 +290,7 @@ public class Hl7ValidatorImpl implements Hl7Validator {
         switch (valueType) {
             case "NM": // Numeric
                 try {
-                    Double.parseDouble(value);
+                    Double.parseDouble(value.replace(",", "."));
                 } catch (NumberFormatException e) {
                     return Hl7ValidationResult.error("OBX-5",
                             "Value Type NM requires numeric value, got: " + value);

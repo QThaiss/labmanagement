@@ -6,28 +6,23 @@
 
 package fit.warehouse_service.dtos.request;
 
-import fit.warehouse_service.enums.DataType;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
-import lombok.AllArgsConstructor;
-import lombok.Builder;
-import lombok.Data;
-import lombok.NoArgsConstructor;
+import lombok.Getter;
+import lombok.Setter;
 
-/*
- * @description: DTO for modifying an existing Configuration Setting.
- * @author: Tran Hien Vinh
- * @date:   03/11/2025
- * @version:    1.0
- */
-@Data
-@Builder
-@NoArgsConstructor
-@AllArgsConstructor
+import java.util.Map;
+
+@Getter
+@Setter
 public class ModifyConfigurationRequest {
-    @NotNull(message = "New value is required")
-    private Object newValue;
 
-    @Size(max = 500, message = "Modification reason cannot exceed 500 characters")
+    @NotNull(message = "Settings cannot be null.")
+    private Map<String, Object> settings; // Thay thế cho newValue cũ
+
+    @Size(max = 255, message = "Reason must not exceed 255 characters.")
     private String modificationReason;
+
+    // Có thể cho phép cập nhật version khi sửa đổi
+    private String version;
 }

@@ -20,4 +20,6 @@ public interface ReagentCheckService {
      * @return true nếu hóa chất đủ, false nếu không đủ
      */
     boolean areReagentsSufficient(String instrumentId);
+
+    void uninstallReagent(String instrumentId, String instrumentReagentId, String reason);
 }

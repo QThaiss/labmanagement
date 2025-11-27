@@ -13,15 +13,18 @@ import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
-import java.io.Serializable;
+import java.util.Map;
 
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
-public class ConfigurationCreatedEvent implements Serializable {
+public class ConfigurationCreatedEvent {
     private String id;
     private String name;
-    private String dataType; // Sử dụng String để đơn giản hóa việc truyền enum
-    private String value;
+    private String configType;      // Mới
+    private String instrumentModel; // Mới
+    private String instrumentType;  // Mới
+    private String version;         // Mới
+    private Map<String, Object> settings; // Thay thế cho value/dataType
     private String description;
 }

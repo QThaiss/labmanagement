@@ -1,5 +1,6 @@
 package fit.test_order_service.services.impl;
 
+import fit.test_order_service.dtos.event.SystemEvent;
 import fit.test_order_service.dtos.request.AddCommentRequest;
 import fit.test_order_service.dtos.request.DeleteOrderCommentRequest;
 import fit.test_order_service.dtos.request.ReplyCommentRequest;
@@ -20,6 +21,7 @@ import fit.test_order_service.exceptions.TooManyRequestsException;
 import fit.test_order_service.exceptions.DuplicateCommentException;
 import fit.test_order_service.mappers.OrderCommentMapper;
 import fit.test_order_service.repositories.*;
+import fit.test_order_service.services.EventLogPublisher;
 import fit.test_order_service.services.OrderCommentService;
 import fit.test_order_service.utils.SecurityUtils;
 import jakarta.transaction.Transactional;
@@ -28,6 +30,7 @@ import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
+import java.util.Map;
 
 @Service
 @RequiredArgsConstructor
@@ -39,6 +42,7 @@ public class OrderCommentServiceImpl implements OrderCommentService {
     private final OrderEventLogRepository ordereventLogRepository;
     private final TestOrderRepository testOrderRepository;
     private final TestResultRepository testResultRepository;
+    private final EventLogPublisher eventLogPublisher;
 
     /**
      * Tạo mới comment cho TestOrder hoặc TestResult
@@ -113,6 +117,15 @@ public class OrderCommentServiceImpl implements OrderCommentService {
         OrderEventLog log = orderCommentMapper.toEventLogForCommentCreate(savedComment, orderIdForLog);
         ordereventLogRepository.save(log);
 
+        eventLogPublisher.publishEvent(SystemEvent.builder()
+                .eventCode("E_00005")
+                .action("Add Comment")
+                .message("Added comment to order " + request.getTargetId())
+                .sourceService("TEST_ORDER_SERVICE")
+                .operator(SecurityUtils.getCurrentUserId())
+                .details(Map.of("commentId", savedComment.getCommentId(), "content", request.getContent()))
+                .build());
+
         // Map Entity -> Response (có fullName từ IAM)
         return orderCommentMapper.toCreateResponse(savedComment);
     }
@@ -175,6 +188,15 @@ public class OrderCommentServiceImpl implements OrderCommentService {
         OrderEventLog log = orderCommentMapper.toEventLogForCommentCreate(savedReply, orderIdForLog);
         ordereventLogRepository.save(log);
 
+        eventLogPublisher.publishEvent(SystemEvent.builder()
+                .eventCode("E_00005")
+                .action("Reply Comment")
+                .message("Reply to comment " + parentCommentId)
+                .sourceService("TEST_ORDER_SERVICE")
+                .operator(SecurityUtils.getCurrentUserId())
+                .details(Map.of("commentId", savedReply.getCommentId(), "content", request.getContent()))
+                .build());
+
         // 7. --- THAY ĐỔI LOGIC TRẢ VỀ ---
         // Trả về comment Cha (parentComment)
         // Mapper (toCommentResponse) sẽ tự động load danh sách replies (bao gồm cả reply vừa tạo)
@@ -207,6 +229,15 @@ public class OrderCommentServiceImpl implements OrderCommentService {
         OrderEventLog eventLog = orderCommentMapper.toEventLogForCommentUpdate(comment, oldContent, request, orderIdForLog);
         ordereventLogRepository.save(eventLog);
 
+        eventLogPublisher.publishEvent(SystemEvent.builder()
+                .eventCode("E_00006")
+                .action("Modify Comment")
+                .message("Modified comment " + commentId)
+                .sourceService("TEST_ORDER_SERVICE")
+                .operator(SecurityUtils.getCurrentUserId())
+                .details(Map.of("commentId", commentId))
+                .build());
+
         // Trả response
         return orderCommentMapper.toUpdateResponse(comment);
     }
@@ -229,6 +260,15 @@ public class OrderCommentServiceImpl implements OrderCommentService {
         String orderIdForLog = getOrderIdForLog(comment);
         OrderEventLog log = orderCommentMapper.toEventLogForCommentDelete(comment, request, orderIdForLog);
         ordereventLogRepository.save(log);
+
+        eventLogPublisher.publishEvent(SystemEvent.builder()
+                .eventCode("E_00007")
+                .action("Delete Comment")
+                .message("Deleted comment " + commentId)
+                .sourceService("TEST_ORDER_SERVICE")
+                .operator(SecurityUtils.getCurrentUserId())
+                .details(Map.of("commentId", commentId))
+                .build());
 
         // Trả response
         return DeleteOrderCommentResponse.builder()

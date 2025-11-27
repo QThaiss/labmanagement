@@ -46,6 +46,25 @@ public class RabbitMQConfig {
     public static final String CONFIGURATION_DELETED_ROUTING_KEY = "configuration.deleted";
     public static final String CONFIGURATION_DELETED_QUEUE = "q.configuration_deleted";
 
+    // Thêm các hằng số mới
+    public static final String CONFIGURATION_UPDATED_ROUTING_KEY = "configuration.updated";
+    public static final String CONFIGURATION_UPDATED_QUEUE = "q.configuration_updated";
+
+    // Thêm Bean Queue
+    @Bean
+    public Queue configurationUpdatedQueue() {
+        return new Queue(CONFIGURATION_UPDATED_QUEUE, true);
+    }
+
+    // Thêm Bean Binding
+    @Bean
+    public Binding configurationUpdatedBinding(Queue configurationUpdatedQueue, TopicExchange instrumentExchange) {
+        return BindingBuilder
+                .bind(configurationUpdatedQueue)
+                .to(instrumentExchange)
+                .with(CONFIGURATION_UPDATED_ROUTING_KEY);
+    }
+
     @Bean
     public TopicExchange instrumentExchange() {
         return new TopicExchange(INSTRUMENT_EXCHANGE);

@@ -12,6 +12,7 @@ import ca.uhn.hl7v2.model.v25.group.ORU_R01_ORDER_OBSERVATION;
 import ca.uhn.hl7v2.model.v25.message.ORU_R01;
 import ca.uhn.hl7v2.model.v25.segment.OBX;
 import ca.uhn.hl7v2.parser.Parser;
+import fit.test_order_service.dtos.event.SystemEvent;
 import fit.test_order_service.dtos.request.Hl7MessageRequest;
 import fit.test_order_service.dtos.response.Hl7Metadata;
 import fit.test_order_service.dtos.response.Hl7ProcessResponse;
@@ -21,10 +22,12 @@ import fit.test_order_service.entities.*;
 import fit.test_order_service.enums.EntrySource;
 import fit.test_order_service.enums.IngestStatus;
 import fit.test_order_service.enums.ItemStatus;
+import fit.test_order_service.enums.OrderStatus;
 import fit.test_order_service.exceptions.AlreadyExistsException;
 import fit.test_order_service.exceptions.BadRequestException;
 import fit.test_order_service.repositories.*;
 import fit.test_order_service.services.*;
+import fit.test_order_service.utils.SecurityUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -35,6 +38,7 @@ import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /*
@@ -67,6 +71,8 @@ public class Hl7ProcessingServiceImpl implements Hl7ProcessingService {
     private final Parser parser;
 
     private final TestOrderStatusService testOrderStatusService;
+
+    private final EventLogPublisher eventLogPublisher;
 
     @Override
     public Hl7ProcessResponse processHl7Message(Hl7MessageRequest request) {
@@ -146,11 +152,32 @@ public class Hl7ProcessingServiceImpl implements Hl7ProcessingService {
                 resultIds.add(saved.getResultId());
 
                 // Áp dụng quy tắc đánh dấu (flagging rules)
-                flaggingService.applyFlaggingRules(saved);
+                //flaggingService.applyFlaggingRules(saved);
+
+                eventLogPublisher.publishEvent(SystemEvent.builder()
+                        .eventCode("E_00004")
+                        .action("Modify Test Result")
+                        .message("Modified results for order " + orderId)
+                        .sourceService("TEST_ORDER_SERVICE")
+                        .operator("INSTRUMENT_HL7_INGEST")
+                        .details(Map.of("orderId", orderId, "resultId", saved.getResultId()))
+                        .build());
             }
 
             // Cập nhật trạng thái TestOrder nếu cần
-            testOrderStatusService.updateOrderStatusIfNeeded(orderId);
+            //testOrderStatusService.updateOrderStatusIfNeeded(orderId);
+            OrderStatus currentStatus = order.getStatus();
+            OrderStatus newStatus = determineOrderStatus(order);
+
+            if (currentStatus != newStatus) {
+                OrderStatus previousStatus = order.getStatus();
+                order.setStatus(newStatus);
+                order.setRunBy("INSTRUMENT_HL7_INGEST");
+                order.setRunAt(LocalDateTime.now(ZoneOffset.UTC));
+                testOrderRepository.save(order);
+
+                log.info("Order {} status updated from {} to {}", orderId, previousStatus, newStatus);
+            }
 
             // Cập nhật audit ingest thành công
             updateIngestAuditSuccess(ingestAudit);
@@ -169,6 +196,16 @@ public class Hl7ProcessingServiceImpl implements Hl7ProcessingService {
             handleParsingError(ingestAudit, e.getMessage(), rawMessage);
             throw new BadRequestException("Failed to parse HL7 message: " + e.getMessage());
         }
+    }
+
+    private OrderStatus determineOrderStatus(TestOrder order) {
+        List<TestResult> results = order.getResults();
+        if (results == null || results.isEmpty()) {
+            return OrderStatus.PENDING;
+        }
+
+        // Nếu đã có kết quả thì xem như đã hoàn tất
+        return OrderStatus.COMPLETED;
     }
 
     private String truncate(String value, int maxLength) {

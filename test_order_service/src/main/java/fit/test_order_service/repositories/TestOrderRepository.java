@@ -12,6 +12,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.time.LocalDateTime;
@@ -70,5 +71,9 @@ public interface TestOrderRepository extends JpaRepository<TestOrder, String> {
     List<TestOrder> findByDeletedFalse();
 
     Optional<TestOrder> findByBarcode(String barcode);
+
+    // Thêm query tìm các đơn hàng quá hạn chưa có kết quả
+    @Query("SELECT t FROM TestOrder t WHERE t.status IN ('PENDING', 'PROCESSING') AND t.createdAt < :timeout")
+    List<TestOrder> findStuckOrders(@Param("timeout") LocalDateTime timeout);
 }
 

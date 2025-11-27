@@ -78,5 +78,5 @@ public interface InstrumentService {
      * @param endDate   Lọc theo ngày tạo kết thúc (nếu có).
      * @return Trang kết quả chứa danh sách InstrumentResponse.
      */
-    PageResponse<InstrumentResponse> getAllInstruments(int page, int size, String[] sort, String search, LocalDate startDate, LocalDate endDate);
+    PageResponse<InstrumentResponse> getAllInstruments(int page, int size, String[] sort, String search, String configType, LocalDate startDate, LocalDate endDate);
 }

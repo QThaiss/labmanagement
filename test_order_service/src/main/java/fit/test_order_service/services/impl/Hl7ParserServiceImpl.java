@@ -238,6 +238,23 @@ public class Hl7ParserServiceImpl implements Hl7ParserService {
             // Trích xuất thời gian đo lường
             LocalDateTime measuredAt = parseTimestamp(obx.getDateTimeOfTheObservation());
 
+            // Chuẩn hóa giá trị nếu value type là NM (numeric)
+            String valueType = obx.getValueType().getValue();
+
+            if ("NM".equalsIgnoreCase(valueType) && valueText != null) {
+                // Thay dấu phẩy bằng dấu chấm
+                valueText = valueText.replace(",", ".");
+
+                // Kiểm tra lại có phải số hợp lệ không
+                try {
+                    Double.parseDouble(valueText);
+                } catch (NumberFormatException ex) {
+                    throw new HL7Exception(
+                            "Value Type NM requires a valid numeric value, got: " + valueText
+                    );
+                }
+            }
+
             // Trả về đối tượng ParsedTestResult
             return ParsedTestResult.builder()
                     .orderId(orderId)

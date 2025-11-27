@@ -9,16 +9,13 @@ package fit.warehouse_service.dtos.response;/*
  * @version: 1.0
  */
 
-import fit.warehouse_service.enums.DataType;
 import lombok.Builder;
 import lombok.Getter;
 import lombok.Setter;
 
 import java.time.LocalDateTime;
+import java.util.Map;
 
-/**
- * DTO trả về thông tin chi tiết của một Configuration Setting.
- */
 @Getter
 @Setter
 @Builder
@@ -26,8 +23,16 @@ public class ConfigurationResponse {
     private String id;
     private String name;
     private String description;
-    private String dataType;
-    private Object value;
+
+    // Các trường mới
+    private String configType;
+    private String instrumentModel;
+    private String instrumentType;
+    private String version;
+
+    // Trả về Object (Map) thay vì String để FE dễ render JSON
+    private Map<String, Object> settings;
+
     private LocalDateTime createdAt;
     private String createdByUserId;
     private LocalDateTime updatedAt;
