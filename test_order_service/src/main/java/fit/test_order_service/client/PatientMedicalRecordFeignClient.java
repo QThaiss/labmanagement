@@ -7,7 +7,7 @@
 package fit.test_order_service.client;
 
 import fit.test_order_service.client.dtos.PatientMedicalRecordInternalResponse;
-import fit.test_order_service.configs.FeignClientConfig;
+import fit.test_order_service.services.impl.FeignClientConfig;
 import fit.test_order_service.dtos.response.ApiResponse;
 import org.springframework.cloud.openfeign.FeignClient;
 import org.springframework.web.bind.annotation.GetMapping;

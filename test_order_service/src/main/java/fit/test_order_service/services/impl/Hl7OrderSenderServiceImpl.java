@@ -6,7 +6,6 @@
 
 package fit.test_order_service.services.impl;
 
-import fit.test_order_service.configs.RabbitMQConfig;
 import fit.test_order_service.dtos.request.Hl7MessageRequest;
 import fit.test_order_service.dtos.request.InstrumentOrderRequest;
 import fit.test_order_service.dtos.response.Hl7ProcessResponse;

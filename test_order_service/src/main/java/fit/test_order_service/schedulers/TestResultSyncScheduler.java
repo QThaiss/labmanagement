@@ -9,7 +9,6 @@ package fit.test_order_service.schedulers;/*
  * @version: 1.0
  */
 
-import fit.test_order_service.configs.RabbitMQConfig;
 import fit.test_order_service.dtos.event.TestResultSyncRequestEvent;
 import fit.test_order_service.entities.TestOrder;
 import fit.test_order_service.repositories.TestOrderRepository;

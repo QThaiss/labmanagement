@@ -49,7 +49,7 @@ public class OrderCommentServiceImpl implements OrderCommentService {
      */
     @Override
     @Transactional
-    public AddCommentResponse addComment(AddCommentRequest request) {
+    public OrderCommentResponse addComment(AddCommentRequest request) {
 
         // Validate dữ liệu (mapper cũng validate, nhưng service nên validate trước)
         CommentTargetType targetType;
@@ -205,7 +205,7 @@ public class OrderCommentServiceImpl implements OrderCommentService {
 
     @Transactional
     @Override
-    public UpdateOrderCommentResponse modifyComment(String commentId, UpdateOrderCommentRequest request) {
+    public OrderCommentResponse modifyComment(String commentId, UpdateOrderCommentRequest request) {
 
         // Tìm comment
         OrderComment comment = orderCommentRepository.findByCommentIdAndDeletedAtIsNull(commentId)

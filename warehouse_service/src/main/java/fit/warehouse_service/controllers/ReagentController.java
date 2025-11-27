@@ -1,6 +1,7 @@
 package fit.warehouse_service.controllers;
 
 import fit.warehouse_service.dtos.request.ReagentDeductionRequest;
+import fit.warehouse_service.dtos.request.ReagentInstallationDeductionRequest;
 import fit.warehouse_service.dtos.response.ApiResponse;
 import fit.warehouse_service.dtos.response.ReagentDeductionResponse;
 import fit.warehouse_service.services.ReagentService;
@@ -41,4 +42,12 @@ public class ReagentController {
 
         return ResponseEntity.ok(ApiResponse.success(isAvailable, message));
     }
+
+    @PostMapping("/deduct-installation")
+    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')") // Tùy chỉnh role
+    public ResponseEntity<ApiResponse<Boolean>> deductForInstallation(
+            @RequestBody ReagentInstallationDeductionRequest request) {
+        return ResponseEntity.ok(reagentService.deductReagentForInstallation(request));
+    }
+
 }

@@ -4,7 +4,10 @@ import fit.test_order_service.dtos.request.AddCommentRequest;
 import fit.test_order_service.dtos.request.DeleteOrderCommentRequest;
 import fit.test_order_service.dtos.request.ReplyCommentRequest;
 import fit.test_order_service.dtos.request.UpdateOrderCommentRequest;
-import fit.test_order_service.dtos.response.*;
+// Chỉ giữ lại OrderCommentResponse và các response cần thiết khác
+import fit.test_order_service.dtos.response.DeleteOrderCommentResponse;
+import fit.test_order_service.dtos.response.OrderCommentResponse;
+import fit.test_order_service.dtos.response.ApiResponse;
 import fit.test_order_service.services.OrderCommentService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -24,12 +27,13 @@ public class OrderCommentController {
 
     @PostMapping
     @PreAuthorize("hasAnyRole('ADMIN','MANAGER','USER')")
-    public ResponseEntity<ApiResponse<AddCommentResponse>> createOrderComment(
+    public ResponseEntity<ApiResponse<OrderCommentResponse>> createOrderComment(
             @Valid @RequestBody AddCommentRequest request
     ) {
-        AddCommentResponse response = orderCommentService.addComment(request);
+        OrderCommentResponse response = orderCommentService.addComment(request);
 
-        ApiResponse<AddCommentResponse> apiResponse = ApiResponse.<AddCommentResponse>builder()
+        // Thay đổi kiểu generic từ AddCommentResponse sang OrderCommentResponse
+        ApiResponse<OrderCommentResponse> apiResponse = ApiResponse.<OrderCommentResponse>builder()
                 .success(true)
                 .status(HttpStatus.CREATED.value())
                 .message("Comment created successfully")
@@ -40,13 +44,14 @@ public class OrderCommentController {
 
     @PutMapping("/{commentId}")
     @PreAuthorize("hasAnyRole('ADMIN','MANAGER','USER')")
-    public ResponseEntity<ApiResponse<UpdateOrderCommentResponse>> modifyOrderComment(
+    public ResponseEntity<ApiResponse<OrderCommentResponse>> modifyOrderComment(
             @PathVariable String commentId,
             @Valid @RequestBody UpdateOrderCommentRequest request
     ) {
-        UpdateOrderCommentResponse response = orderCommentService.modifyComment(commentId, request);
+        OrderCommentResponse response = orderCommentService.modifyComment(commentId, request);
 
-        ApiResponse<UpdateOrderCommentResponse> apiResponse = ApiResponse.<UpdateOrderCommentResponse>builder()
+        // Thay đổi kiểu generic từ UpdateOrderCommentResponse sang OrderCommentResponse
+        ApiResponse<OrderCommentResponse> apiResponse = ApiResponse.<OrderCommentResponse>builder()
                 .success(true)
                 .status(HttpStatus.OK.value())
                 .message("Comment updated successfully")
@@ -73,6 +78,7 @@ public class OrderCommentController {
 
         return new ResponseEntity<>(apiResponse, HttpStatus.OK);
     }
+
     @PostMapping("/{parentCommentId}/reply")
     @PreAuthorize("hasAnyRole('ADMIN','MANAGER','USER')")
     public ResponseEntity<ApiResponse<OrderCommentResponse>> createReplyComment(

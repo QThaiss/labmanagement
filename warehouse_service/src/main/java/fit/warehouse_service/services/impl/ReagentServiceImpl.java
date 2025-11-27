@@ -1,6 +1,7 @@
 package fit.warehouse_service.services.impl;
 
 import fit.warehouse_service.dtos.request.ReagentDeductionRequest;
+import fit.warehouse_service.dtos.request.ReagentInstallationDeductionRequest;
 import fit.warehouse_service.dtos.response.ApiResponse;
 import fit.warehouse_service.dtos.response.ReagentDeductionResponse;
 import fit.warehouse_service.dtos.response.ReagentUsageLimit;
@@ -8,16 +9,19 @@ import fit.warehouse_service.entities.ReagentLot;
 import fit.warehouse_service.entities.ReagentUsageHistory;
 import fit.warehouse_service.enums.WarehouseActionType;
 import fit.warehouse_service.exceptions.BadRequestException;
+import fit.warehouse_service.exceptions.NotFoundException;
 import fit.warehouse_service.repositories.ReagentLotRepository;
 import fit.warehouse_service.repositories.ReagentUsageHistoryRepository;
 import fit.warehouse_service.services.ReagentService;
 import fit.warehouse_service.services.WarehouseEventLogService;
+import fit.warehouse_service.utils.SecurityUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 
@@ -144,4 +148,44 @@ public class ReagentServiceImpl implements ReagentService {
             );
         }
     }
+    @Override
+    @Transactional
+    public ApiResponse<Boolean> deductReagentForInstallation(ReagentInstallationDeductionRequest request) {
+        log.info("Processing installation deduction for Lot: {}, Quantity: {}", request.getLotNumber(), request.getQuantity());
+
+        // 1. Tìm Lô hàng cụ thể
+        // VÌ REPO TRẢ VỀ ĐỐI TƯỢNG (CÓ THỂ NULL), TA KHÔNG DÙNG .orElseThrow() TRỰC TIẾP ĐƯỢC
+        ReagentLot lot = reagentLotRepository.findByLotNumber(request.getLotNumber());
+
+        // Kiểm tra thủ công
+        if (lot == null) {
+            throw new NotFoundException("Reagent Lot not found: " + request.getLotNumber());
+        }
+
+        // 2. Kiểm tra số lượng tồn
+        if (lot.getCurrentQuantity() < request.getQuantity()) {
+            throw new BadRequestException("Insufficient stock for Lot " + request.getLotNumber() +
+                    ". Available: " + lot.getCurrentQuantity() + ", Requested: " + request.getQuantity());
+        }
+
+        // 3. Trừ kho
+        double oldQuantity = lot.getCurrentQuantity();
+        lot.setCurrentQuantity(oldQuantity - request.getQuantity());
+        reagentLotRepository.save(lot);
+
+        ReagentUsageHistory usage = new ReagentUsageHistory();
+        usage.setReagentLot(lot);
+        usage.setCreatedByUserId(SecurityUtils.getCurrentUserId());
+        usage.setQuantityUsed(request.getQuantity());
+        usage.setAction("INSTALL_ON_INSTRUMENT"); // Action riêng cho việc cài đặt
+        usage.setCreatedAt(LocalDateTime.now()); // Giả sử entity có field này
+        usageHistoryRepository.save(usage);
+
+        // 5. Ghi Log sự kiện kho
+        logService.logEvent(WarehouseActionType.REAGENT_USED, lot.getId(), "ReagentLot",
+                "Deducted " + request.getQuantity() + " for Installation on " + request.getInstrumentId());
+
+        return ApiResponse.success(true, "Deduction successful");
+    }
+
 }

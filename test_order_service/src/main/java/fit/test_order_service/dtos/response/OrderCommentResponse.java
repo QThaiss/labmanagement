@@ -24,8 +24,13 @@ import java.util.List;
 public class OrderCommentResponse {
     private String id;
     private String authorId;
+    private CommentTargetResponse target;
     private String content;
     private LocalDateTime createdAt;
-
+    private CreatedBySummary createdBy;
+    private boolean edited;
+    private Integer editCount;
+    private String updatedBy;
+    private LocalDateTime updatedAt;
     private List<OrderCommentResponse> replies;
 }

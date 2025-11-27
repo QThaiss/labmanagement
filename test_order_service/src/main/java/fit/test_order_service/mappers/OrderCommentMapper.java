@@ -5,7 +5,10 @@ import fit.test_order_service.client.dtos.UserInternalResponse;
 import fit.test_order_service.dtos.request.AddCommentRequest;
 import fit.test_order_service.dtos.request.DeleteOrderCommentRequest;
 import fit.test_order_service.dtos.request.UpdateOrderCommentRequest;
-import fit.test_order_service.dtos.response.*;
+// Cập nhật imports để chỉ giữ lại DTO chung
+import fit.test_order_service.dtos.response.OrderCommentResponse;
+import fit.test_order_service.dtos.response.CommentTargetResponse;
+import fit.test_order_service.dtos.response.CreatedBySummary;
 import fit.test_order_service.entities.*;
 import fit.test_order_service.enums.CommentTargetType;
 import fit.test_order_service.enums.EventType;
@@ -15,7 +18,7 @@ import fit.test_order_service.exceptions.NotFoundException;
 import fit.test_order_service.utils.SecurityUtils;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
-import lombok.extern.slf4j.Slf4j;
+import lombok.extern.slf4j.Slf4j; // Thêm lại import cho @Slf4j nếu cần thiết
 
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
@@ -25,6 +28,7 @@ import java.util.stream.Collectors;
 
 @Component
 @RequiredArgsConstructor
+@Slf4j
 public class OrderCommentMapper {
 
     private final IamFeignClient iamFeignClient;
@@ -52,7 +56,11 @@ public class OrderCommentMapper {
                 .build();
     }
 
-    public AddCommentResponse toCreateResponse(OrderComment comment) {
+    /**
+     * Thay thế cho toCreateResponse(AddCommentResponse)
+     * Chuyển đổi sang OrderCommentResponse cho phản hồi tạo mới, bao gồm full name.
+     */
+    public OrderCommentResponse toCreateResponse(OrderComment comment) {
         if (comment == null) return null;
 
         CommentTargetResponse target = null;
@@ -70,7 +78,7 @@ public class OrderCommentMapper {
         }
 
 
-        //  Lấy thông tin user từ IAM
+        // Lấy thông tin user từ IAM - Đảm bảo lấy full name
         CreatedBySummary createdBy = CreatedBySummary.builder()
                 .userId(comment.getAuthorUserId())
                 .fullName("Unknown User")
@@ -84,14 +92,21 @@ public class OrderCommentMapper {
             }
         } catch (Exception e) {
             // Bỏ qua lỗi feign, trả về Unknown User
+            log.error("Error fetching user {} info from IAM for comment creation: {}", comment.getAuthorUserId(), e.getMessage());
         }
 
-        return AddCommentResponse.builder()
-                .commentId(comment.getCommentId())
+        return OrderCommentResponse.builder()
+                .id(comment.getCommentId()) // Đổi commentId thành id
+                .authorId(comment.getAuthorUserId())
                 .target(target)
                 .content(comment.getContent())
                 .createdAt(comment.getCreatedAt())
-                .createdBy(createdBy)
+                .createdBy(createdBy) // Đã có full name
+                .edited(comment.isEdited())
+                .editCount(comment.getEditCount())
+                .updatedBy(comment.getUpdatedBy())
+                .updatedAt(comment.getUpdatedAt())
+                .replies(null)
                 .build();
     }
 
@@ -115,16 +130,27 @@ public class OrderCommentMapper {
         comment.setUpdatedAt(LocalDateTime.now(ZoneOffset.UTC));
     }
 
-    public UpdateOrderCommentResponse toUpdateResponse(OrderComment comment) {
+    /**
+     * Thay thế cho toUpdateResponse(UpdateOrderCommentResponse)
+     * Chuyển đổi sang OrderCommentResponse cho phản hồi cập nhật.
+     */
+    public OrderCommentResponse toUpdateResponse(OrderComment comment) {
         if (comment == null) return null;
 
-        return UpdateOrderCommentResponse.builder()
-                .commentId(comment.getCommentId())
+        return OrderCommentResponse.builder()
+                .id(comment.getCommentId())
+                .authorId(comment.getAuthorUserId())
                 .content(comment.getContent())
+                .createdAt(comment.getCreatedAt())
+                // Thông tin cập nhật
                 .edited(comment.isEdited())
                 .editCount(comment.getEditCount())
                 .updatedBy(comment.getUpdatedBy())
                 .updatedAt(comment.getUpdatedAt())
+                // Các trường khác được đặt là null/default
+                .target(null)
+                .createdBy(null)
+                .replies(null)
                 .build();
     }
 
@@ -214,6 +240,10 @@ public class OrderCommentMapper {
                 .createdAt(LocalDateTime.now(ZoneOffset.UTC))
                 .build();
     }
+
+    /**
+     * Chuyển đổi Entity sang DTO (Cấp 1 - bao gồm replies)
+     */
     public OrderCommentResponse toCommentResponse(OrderComment comment) {
         if (comment == null) {
             return null;
@@ -229,19 +259,41 @@ public class OrderCommentMapper {
                     .collect(Collectors.toList());
         }
 
+        // --- Target Mapping ---
+        CommentTargetResponse target = null;
+        if (comment.getTargetType() == CommentTargetType.ORDER) {
+            target = CommentTargetResponse.builder()
+                    .type("ORDER")
+                    .testOrderId(comment.getTargetId())
+                    .build();
+        } else if (comment.getTargetType() == CommentTargetType.RESULT) {
+            target = CommentTargetResponse.builder()
+                    .type("RESULT")
+                    .testOrderId(null)
+                    .resultId(comment.getTargetId())
+                    .build();
+        }
+        // ----------------------
+
         // 2. Map comment cha (cấp 1) và gán list replies
         return OrderCommentResponse.builder()
                 .id(comment.getCommentId())
                 .authorId(comment.getAuthorUserId()) // Giữ nguyên String
+                .target(target)
                 .content(comment.getContent())
                 .createdAt(comment.getCreatedAt())
+                .edited(comment.isEdited())
+                .editCount(comment.getEditCount())
+                .updatedBy(comment.getUpdatedBy())
+                .updatedAt(comment.getUpdatedAt())
                 .replies(replyResponses) // Gán danh sách replies
+                .createdBy(null) // Sẽ được service layer bổ sung (enrichment)
                 .build();
     }
 
     /**
      * Chuyển đổi Entity sang DTO (Cấp 2 - không lồng)
-     * Dùng authorId (String)
+     * Dùng cho replies.
      */
     private OrderCommentResponse toSimpleCommentResponse(OrderComment comment) {
         return OrderCommentResponse.builder()
@@ -249,7 +301,14 @@ public class OrderCommentMapper {
                 .authorId(comment.getAuthorUserId()) // Giữ nguyên String
                 .content(comment.getContent())
                 .createdAt(comment.getCreatedAt())
-                .replies(null) // Cấp 2 không có replies
+                .edited(comment.isEdited())
+                .editCount(comment.getEditCount())
+                .updatedBy(comment.getUpdatedBy())
+                .updatedAt(comment.getUpdatedAt())
+                // Cấp 2 không có replies, target, hay createdBy
+                .replies(null)
+                .target(null)
+                .createdBy(null)
                 .build();
     }
 }

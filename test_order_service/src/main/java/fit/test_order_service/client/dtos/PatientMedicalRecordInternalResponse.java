@@ -16,6 +16,8 @@ import java.time.LocalDateTime;
  * @date:   11/10/2025
  * @version:    1.0
  */
+
+
 public record PatientMedicalRecordInternalResponse(
     String medicalRecordId,
 

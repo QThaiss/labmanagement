@@ -14,7 +14,7 @@ import jakarta.transaction.Transactional;
 import java.util.Optional;
 
 public interface OrderCommentService {
-    AddCommentResponse addComment(AddCommentRequest request);
+    OrderCommentResponse addComment(AddCommentRequest request);
 
     // --- THÊM PHƯƠNG THỨC NÀY ---
     /**
@@ -25,7 +25,7 @@ public interface OrderCommentService {
      */
     OrderCommentResponse replyToComment(String parentCommentId, ReplyCommentRequest request);
 
-    UpdateOrderCommentResponse modifyComment(String commentId,UpdateOrderCommentRequest request);
+    OrderCommentResponse modifyComment(String commentId,UpdateOrderCommentRequest request);
     DeleteOrderCommentResponse deleteComment(String commentId, DeleteOrderCommentRequest request);
 
 }

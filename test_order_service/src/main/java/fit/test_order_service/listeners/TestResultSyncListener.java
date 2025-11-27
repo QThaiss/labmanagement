@@ -9,7 +9,7 @@ package fit.test_order_service.listeners;/*
  * @version: 1.0
  */
 
-import fit.test_order_service.configs.RabbitMQConfig;
+import fit.test_order_service.services.impl.RabbitMQConfig;
 import fit.test_order_service.dtos.event.TestResultPublishedEvent;
 import fit.test_order_service.dtos.request.Hl7MessageRequest;
 import fit.test_order_service.dtos.response.Hl7ProcessResponse;
