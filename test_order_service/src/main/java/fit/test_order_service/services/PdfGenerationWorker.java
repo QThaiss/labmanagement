@@ -62,7 +62,6 @@ public class PdfGenerationWorker {
             return;
         }
 
-        // String customSavePath = null; // <--- XÓA BỎ: Không cần biến này nữa
         String customFileName = null;
         List<CommentOrderResponse> comments = new ArrayList<>();
 
@@ -74,7 +73,6 @@ public class PdfGenerationWorker {
                     });
 
                     customFileName = (String) params.get("customFileName");
-                    // customSavePath = (String) params.get("customSavePath"); // <--- XÓA BỎ: Không đọc đường dẫn lưu nữa
 
                     if (params.containsKey("comments")) {
                         List<?> rawComments = (List<?>) params.get("comments");

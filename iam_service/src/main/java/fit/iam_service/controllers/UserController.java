@@ -168,7 +168,7 @@ public class UserController {
     }
 
     @PostMapping("/admin")
-    @PreAuthorize("hasRole('ADMIN')")
+    @PreAuthorize("hasAnyRole('ADMIN')")
 //    @PreAuthorize("hasAuthority('USER_CREATE')")
     public ResponseEntity<ApiResponse<CreateUserResponse>> adminCreateUser(
             @Valid @RequestBody AdminCreateUserRequest req,

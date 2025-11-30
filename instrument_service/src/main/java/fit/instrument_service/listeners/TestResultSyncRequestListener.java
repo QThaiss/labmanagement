@@ -24,9 +24,25 @@ public class TestResultSyncRequestListener {
 
     private final TestResultSyncService testResultSyncService;
 
+    /**
+     * SRS 3.6.1.4: Test Results Sync-up
+     * Lắng nghe yêu cầu đồng bộ từ Test Order Service hoặc Monitoring Service.
+     * Queue này cần được bind với routing key "instrument.sync.request" trong RabbitMQConfig.
+     *
+     * @param request Sự kiện chứa danh sách barcodes cần đồng bộ.
+     */
     @RabbitListener(queues = RabbitMQConfig.SYNC_REQUEST_QUEUE)
-    public void handleSyncRequest(TestResultSyncRequestEvent event) {
-        log.info("Received Sync Request from: {}", event.getRequestedBy());
-        testResultSyncService.processSyncRequest(event);
+    public void handleSyncRequest(TestResultSyncRequestEvent request) {
+        log.info("Received Sync Request. ID: {}, Requested By: {}",
+                request.getRequestId(), request.getRequestedBy());
+
+        try {
+            // Gọi service để tìm và publish lại kết quả
+            testResultSyncService.processSyncRequest(request);
+
+            log.info("Completed processing sync request: {}", request.getRequestId());
+        } catch (Exception e) {
+            log.error("Error processing sync request: {}", request.getRequestId(), e);
+        }
     }
 }

@@ -1,5 +1,11 @@
 package fit.test_order_service.services.impl;
 
+import ca.uhn.hl7v2.HL7Exception;
+import ca.uhn.hl7v2.model.Message;
+import ca.uhn.hl7v2.model.v25.message.ORU_R01;
+import ca.uhn.hl7v2.model.v25.segment.OBR;
+import ca.uhn.hl7v2.model.v25.segment.OBX;
+import ca.uhn.hl7v2.parser.Parser;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import fit.test_order_service.client.IamFeignClient;
@@ -74,6 +80,7 @@ public class TestOrderServiceImpl implements TestOrderService {
     private final TestTypeRepository testTypeRepository;
     private final TestTypeService testTypeService;
     private final WarehouseFeignClient warehouseFeignClient;
+    private final Parser parser;
 
     private final EventLogPublisher eventLogPublisher;
 
@@ -779,104 +786,132 @@ public class TestOrderServiceImpl implements TestOrderService {
         if (request.getHl7Message() != null && !request.getHl7Message().isBlank()) {
             log.info("Processing HL7 adjustments for review of order: {}", orderId);
 
-            // 3a. Parse tin nhắn HL7 để "đọc trước"
-            List<ParsedTestResult> parsedResults;
             try {
-                parsedResults = hl7ParserService.parseHl7Message(request.getHl7Message());
-            } catch (Exception e) {
+                // 3a. Parse tin nhắn HL7 sử dụng HAPI Parser
+                Message message = parser.parse(request.getHl7Message());
+
+                if (!(message instanceof ORU_R01)) {
+                    throw new BadRequestException("Invalid HL7 Message Type. Expected ORU^R01.");
+                }
+
+                ORU_R01 oru = (ORU_R01) message;
+
+                // 3b. Validation: Order ID trong OBR-2 phải khớp với Order ID đang review
+                // Cấu trúc: PATIENT_RESULT -> ORDER_OBSERVATION -> OBR
+                OBR obr = oru.getPATIENT_RESULT().getORDER_OBSERVATION().getOBR();
+                String orderIdFromHl7 = obr.getPlacerOrderNumber().getEntityIdentifier().getValue();
+
+                if (orderIdFromHl7 == null || !Objects.equals(orderId, orderIdFromHl7)) {
+                    throw new BadRequestException(
+                            String.format("HL7 message mismatch: The message is for Order ID '%s', but you are reviewing Order ID '%s'.",
+                                    orderIdFromHl7, orderId)
+                    );
+                }
+
+                // 3c. Xử lý các segment OBX (Kết quả xét nghiệm)
+                int observationReps = oru.getPATIENT_RESULT().getORDER_OBSERVATION().getOBSERVATIONReps();
+
+                if (observationReps == 0) {
+                    throw new BadRequestException("HL7 message does not contain any OBX segments.");
+                }
+
+                for (int i = 0; i < observationReps; i++) {
+                    OBX obx = oru.getPATIENT_RESULT().getORDER_OBSERVATION().getOBSERVATION(i).getOBX();
+
+                    // Lấy Analyte Name từ OBX-3.2 (Text), fallback sang OBX-3.1 (Identifier/Code)
+                    String analyteName = obx.getObservationIdentifier().getText().getValue();
+                    if (analyteName == null || analyteName.isBlank()) {
+                        analyteName = obx.getObservationIdentifier().getIdentifier().getValue();
+                    }
+
+                    // Lấy giá trị từ OBX-5 (Giả sử kiểu NM - Numeric, lấy phần tử đầu tiên)
+                    String newValue = obx.getObservationValue(0).getData().toString();
+
+                    if (analyteName == null || newValue == null) {
+                        log.warn("Skipping adjustment for order {}: AnalyteName or ValueText is null in HL7 OBX segment.", orderId);
+                        continue;
+                    }
+
+                    // Tìm TestResult HIỆN TẠI bằng OrderId và AnalyteName
+                    List<TestResult> existingResults = testResultRepository.findByOrderIdAndAnalyteNameIgnoreCase(orderId, analyteName);
+
+                    if (existingResults.isEmpty()) {
+                        log.warn("Adjustment skipped: Cannot find an existing TestResult for Order {} and Analyte '{}'", orderId, analyteName);
+                        continue;
+                    }
+
+                    // Xử lý nếu có duplicate (thường không nên xảy ra)
+                    TestResult resultToUpdate = existingResults.get(0);
+                    String beforeValue = resultToUpdate.getValueText();
+
+                    // Chỉ cập nhật và ghi log nếu giá trị thực sự thay đổi
+                    if (Objects.equals(beforeValue, newValue)) {
+                        continue;
+                    }
+
+                    // Cập nhật các trường từ HL7
+                    resultToUpdate.setValueText(newValue);
+
+                    // Cập nhật Đơn vị (OBX-6)
+                    String unit = obx.getUnits().getIdentifier().getValue();
+                    if (unit != null) resultToUpdate.setUnit(unit);
+
+                    // Cập nhật Dải tham chiếu (OBX-7)
+                    String refRange = obx.getReferencesRange().getValue();
+                    if (refRange != null) resultToUpdate.setReferenceRange(refRange);
+
+                    // Logic Flagging lại (nếu cần thiết, hoặc lấy từ OBX-8 nếu workflow có set)
+                    // Trong SampleAnalysisWorkflowServiceImpl OBX-8 không được set, nên ta có thể gọi lại FlaggingService
+                    // hoặc để nguyên logic cũ. Ở đây tôi giữ đơn giản là cập nhật giá trị.
+
+                    // Cập nhật thời gian đo (OBX-14)
+                    String measuredAtStr = obx.getDateTimeOfTheObservation().getTime().getValue();
+                    if (measuredAtStr != null) {
+                        // Cần parser convert string HL7 (yyyyMMddHHmmss) sang LocalDateTime nếu muốn chính xác
+                        // resultToUpdate.setMeasuredAt(...)
+                    }
+
+                    testResultRepository.save(resultToUpdate);
+
+                    // Tạo Log thay đổi
+                    TestResultAdjustLog logEntry = TestResultAdjustLog.builder()
+                            .orderId(orderId)
+                            .resultId(resultToUpdate.getResultId())
+                            .reviewMode(mode)
+                            .actorUserId(currentUserId)
+                            .field("valueText")
+                            .beforeValue(beforeValue)
+                            .afterValue(newValue)
+                            .note("Adjusted via HL7 review. Note: " + request.getNote())
+                            .build();
+
+                    logsToSave.add(logEntry);
+                    adjustmentsCount++;
+
+                    // Publish event cập nhật kết quả
+                    eventLogPublisher.publishEvent(SystemEvent.builder()
+                            .eventCode("E_00004")
+                            .action("Modify Test Result")
+                            .message("Modified result via Review for order " + orderId)
+                            .sourceService("TEST_ORDER_SERVICE")
+                            .operator(currentUserId)
+                            .details(Map.of("orderId", orderId, "analyte", analyteName, "old", beforeValue, "new", newValue))
+                            .build());
+                }
+
+                if (!logsToSave.isEmpty()) {
+                    testResultAdjustLogRepository.saveAll(logsToSave);
+                }
+
+                hl7Status = "PROCESSED_SUCCESSFULLY";
+
+            } catch (HL7Exception e) {
                 log.error("Failed to parse HL7 message during review validation", e);
-                throw new BadRequestException("HL7 message is malformed and cannot be parsed: " + e.getMessage());
+                throw new BadRequestException("HL7 message is malformed: " + e.getMessage());
+            } catch (Exception e) {
+                log.error("Unexpected error processing HL7 review", e);
+                throw new BadRequestException("Error processing HL7 review: " + e.getMessage());
             }
-
-            if (parsedResults == null || parsedResults.isEmpty()) {
-                throw new BadRequestException("HL7 adjustment message does not contain any valid test results (OBX segments).");
-            }
-
-            // 3b. Validation: Order ID trong payload phải khớp với Order ID đang review (từ URL)
-            String orderIdFromPayload = parsedResults.get(0).getOrderId();
-            if (orderIdFromPayload == null || !Objects.equals(orderId, orderIdFromPayload)) {
-                throw new BadRequestException(
-                        String.format("HL7 message mismatch: The message is for Order ID '%s', but you are reviewing Order ID '%s'.",
-                                orderIdFromPayload, orderId)
-                );
-            }
-
-            // 3c. *** LOGIC ĐIỀU CHỈNH MỚI ***
-            // Chúng ta không gọi Hl7ProcessingService, mà tự xử lý việc cập nhật
-            for (ParsedTestResult parsed : parsedResults) {
-                String analyteName = parsed.getAnalyteName();
-                String newValue = parsed.getValueText();
-
-                if (analyteName == null || newValue == null) {
-                    log.warn("Skipping adjustment for order {}: AnalyteName or ValueText is null in HL7 OBX segment.", orderId);
-                    continue;
-                }
-
-                // Tìm TestResult HIỆN TẠI bằng OrderId và AnalyteName
-                List<TestResult> existingResults = testResultRepository.findByOrderIdAndAnalyteNameIgnoreCase(orderId, analyteName);
-
-                if (existingResults.isEmpty()) {
-                    log.warn("Adjustment skipped: Cannot find an existing TestResult for Order {} and Analyte '{}'", orderId, analyteName);
-                    continue;
-                }
-
-                if (existingResults.size() > 1) {
-                    log.warn("Adjustment skipped: Found {} duplicate TestResults for Order {} and Analyte '{}'. Manual correction required.",
-                            existingResults.size(), orderId, analyteName);
-                    continue;
-                }
-
-                TestResult resultToUpdate = existingResults.get(0);
-                String beforeValue = resultToUpdate.getValueText();
-
-                // Chỉ cập nhật và ghi log nếu giá trị thực sự thay đổi
-                if (Objects.equals(beforeValue, newValue)) {
-                    log.info("Adjustment skipped for Analyte '{}': Value is already correct.", analyteName);
-                    continue;
-                }
-
-                // Cập nhật các trường liên quan từ HL7
-                resultToUpdate.setValueText(newValue);
-                resultToUpdate.setAbnormalFlag(parsed.getAbnormalFlag()); // Cập nhật cờ
-                resultToUpdate.setReferenceRange(parsed.getReferenceRange()); // Cập nhật dải tham chiếu
-                resultToUpdate.setUnit(parsed.getUnit()); // Cập nhật đơn vị
-                resultToUpdate.setMeasuredAt(parsed.getMeasuredAt()); // Cập nhật thời gian đo
-                resultToUpdate.setTestCode(parsed.getTestCode());
-                // Đánh dấu là đã được điều chỉnh (nếu bạn có trường này)
-                // resultToUpdate.setEdited(true);
-
-                testResultRepository.save(resultToUpdate);
-
-                // Tạo TestResultAdjustLog
-                TestResultAdjustLog logEntry = TestResultAdjustLog.builder()
-                        .orderId(orderId)
-                        .resultId(resultToUpdate.getResultId())
-                        .reviewMode(mode)
-                        .actorUserId(currentUserId)
-                        .field("valueText") // Trường chính được thay đổi
-                        .beforeValue(beforeValue)
-                        .afterValue(newValue)
-                        .note("Adjusted via HL7 review. Note: " + request.getNote())
-                        .build();
-
-                logsToSave.add(logEntry);
-                adjustmentsCount++;
-
-                eventLogPublisher.publishEvent(SystemEvent.builder()
-                        .eventCode("E_00004")
-                        .action("Modify Test Result")
-                        .message("Modified results for order " + orderId)
-                        .sourceService("TEST_ORDER_SERVICE")
-                        .operator(SecurityUtils.getCurrentUserId())
-                        .details(Map.of("orderId", orderId, "updates", request))
-                        .build());
-            }
-
-            if (!logsToSave.isEmpty()) {
-                testResultAdjustLogRepository.saveAll(logsToSave);
-            }
-
-            hl7Status = "PROCESSED_SUCCESSFULLY";
 
         } else {
             log.info("Review for order {} submitted with no HL7 adjustments.", orderId);
@@ -902,7 +937,7 @@ public class TestOrderServiceImpl implements TestOrderService {
                 .action("Review Test Order Results")
                 .message("Completed review for order " + orderId)
                 .sourceService("TEST_ORDER_SERVICE")
-                .operator(SecurityUtils.getCurrentUserId())
+                .operator(currentUserId)
                 .details(Map.of("orderId", orderId, "status", "HUMAN_REVIEWED"))
                 .build());
 

@@ -282,8 +282,13 @@ public class ExcelGenerationWorker {
                     nameMap.put(userId, userId + " (Name not found)");
                 }
             } catch (Exception e) {
-                log.error("Error fetching name for user ID {}: {}", userId, e.getMessage());
-                nameMap.put(userId, userId + " (Error)");
+                if (!userId.equals("INSTRUMENT_HL7_INGEST")) {
+                    log.error("Error fetching name for user ID {}: {}", userId, e.getMessage());
+                    nameMap.put(userId, userId + " (Error)");
+                } else {
+                    nameMap.put(userId, userId);
+                }
+
             }
         }
         return nameMap;

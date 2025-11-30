@@ -2,25 +2,29 @@ package fit.test_order_service.utils;
 
 import com.itextpdf.io.font.PdfEncodings;
 import com.itextpdf.io.font.constants.StandardFonts;
+import com.itextpdf.kernel.colors.Color;
+import com.itextpdf.kernel.colors.ColorConstants;
+import com.itextpdf.kernel.colors.DeviceRgb;
 import com.itextpdf.kernel.font.PdfFont;
 import com.itextpdf.kernel.font.PdfFontFactory;
 import com.itextpdf.kernel.geom.PageSize;
 import com.itextpdf.kernel.pdf.PdfDocument;
 import com.itextpdf.kernel.pdf.PdfWriter;
+import com.itextpdf.kernel.pdf.canvas.draw.SolidLine;
 import com.itextpdf.layout.Document;
-import com.itextpdf.layout.element.Cell;
-import com.itextpdf.layout.element.Paragraph;
-import com.itextpdf.layout.element.Table;
+import com.itextpdf.layout.borders.Border;
+import com.itextpdf.layout.borders.SolidBorder;
+import com.itextpdf.layout.element.*;
 import com.itextpdf.layout.properties.TextAlignment;
 import com.itextpdf.layout.properties.UnitValue;
+import com.itextpdf.layout.properties.VerticalAlignment;
 import fit.test_order_service.client.IamFeignClient;
 import fit.test_order_service.client.dtos.UserInternalResponse;
 import fit.test_order_service.dtos.response.ApiResponse;
-// --- SỬA 1: IMPORT DTO MỚI ---
 import fit.test_order_service.dtos.response.CommentOrderResponse;
-// import fit.test_order_service.entities.OrderComment; // (Bỏ entity cũ)
 import fit.test_order_service.entities.TestOrder;
 import fit.test_order_service.entities.TestResult;
+import fit.test_order_service.enums.AbnormalFlag;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -36,256 +40,326 @@ import java.util.List;
 public class PdfGeneratorUtil {
 
     private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ofPattern("dd/MM/yyyy");
-    private static final DateTimeFormatter DATETIME_FORMATTER = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm:ss");
+    private static final DateTimeFormatter DATETIME_FORMATTER = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm");
 
     private final IamFeignClient iamFeignClient;
 
     private static final String FONT_REGULAR = "fonts/times.ttf";
     private static final String FONT_BOLD = "fonts/timesbd.ttf";
 
+    // --- COLORS CONFIGURATION ---
+    private static final Color PRIMARY_COLOR = new DeviceRgb(0, 51, 102); // Xanh y tế
+    private static final Color HEADER_BG_COLOR = new DeviceRgb(240, 240, 240); // Xám nhạt cho header bảng
+    private static final Color ALERT_COLOR = ColorConstants.RED; // Đỏ cho cảnh báo
 
-    // --- SỬA 2: THAY ĐỔI CHỮ KÝ PHƯƠNG THỨC ĐỂ NHẬN DTO ---
     public byte[] generateTestResultPdf(TestOrder order, List<TestResult> results, List<CommentOrderResponse> comments) {
         if (order == null) {
             log.error("Cannot generate PDF: TestOrder object is null.");
             return null;
         }
-        log.debug("Generating PDF for Order ID: {}", order.getOrderId());
-        log.debug("Received {} results and {} comments.", (results != null ? results.size() : 0), (comments != null ? comments.size() : 0));
 
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        byte[] finalBytes;
 
         try (PdfWriter writer = new PdfWriter(baos);
              PdfDocument pdfDoc = new PdfDocument(writer);
              Document document = new Document(pdfDoc, PageSize.A4)) {
 
-            PdfFont fontRegular;
-            PdfFont fontBold;
-
-            try {
-                fontRegular = PdfFontFactory.createFont(
-                        FONT_REGULAR, PdfEncodings.IDENTITY_H, PdfFontFactory.EmbeddingStrategy.PREFER_EMBEDDED
-                );
-                fontBold = PdfFontFactory.createFont(
-                        FONT_BOLD, PdfEncodings.IDENTITY_H, PdfFontFactory.EmbeddingStrategy.PREFER_EMBEDDED
-                );
-                log.debug("Đã load font tiếng Việt (Regular, Bold) cho document này.");
-            } catch (IOException e) {
-                log.warn("Không thể load font 'fonts/times.ttf'. Sử dụng Helvetica.", e);
-                // Fallback
-                fontRegular = PdfFontFactory.createFont(StandardFonts.HELVETICA);
-                fontBold = PdfFontFactory.createFont(StandardFonts.HELVETICA_BOLD);
-            }
+            // 1. Load Font (Có fallback)
+            PdfFont fontRegular = loadFont(FONT_REGULAR, StandardFonts.HELVETICA);
+            PdfFont fontBold = loadFont(FONT_BOLD, StandardFonts.HELVETICA_BOLD);
 
             document.setFont(fontRegular);
-            log.debug("Set default font. BAOS size: {}", baos.size());
+            document.setMargins(30, 30, 30, 30);
 
-            // --- Tiêu đề ---
+            // 2. HEADER PHÒNG KHÁM (Thêm vào cho chuyên nghiệp)
+            addClinicHeader(document, fontBold);
+
+            // Đường kẻ phân cách
+            LineSeparator ls = new LineSeparator(new SolidLine(1f));
+            ls.setMarginTop(10).setMarginBottom(15);
+            document.add(ls);
+
+            // 3. TIÊU ĐỀ PHIẾU
+            document.add(new Paragraph("PHIẾU KẾT QUẢ XÉT NGHIỆM")
+                    .setFont(fontBold)
+                    .setFontSize(16)
+                    .setFontColor(PRIMARY_COLOR)
+                    .setTextAlignment(TextAlignment.CENTER)
+                    .setMarginBottom(15));
+
+            // 4. BẢNG 1: THÔNG TIN ORDER (Giữ nguyên nội dung field, chỉ format đẹp hơn)
             try {
-                document.add(new Paragraph("Test Order Results")
-                        .setFont(fontBold)
-                        .setFontSize(18)
-                        .setTextAlignment(TextAlignment.CENTER)
-                        .setMarginBottom(15));
-                document.add(new Paragraph("Order Code: " + getValueOrNA(order.getOrderCode())).setFontSize(10));
-                document.add(new Paragraph("Patient Name: " + getValueOrNA(order.getFullName())).setFontSize(10));
-                document.add(new Paragraph("Date of Birth: " + (order.getDateOfBirth() != null ? order.getDateOfBirth().format(DATE_FORMATTER) : "N/A")).setFontSize(10));
-                document.add(new Paragraph("Gender: " + (order.getGender() != null ? order.getGender().name() : "N/A")).setFontSize(10));
-                document.add(new Paragraph("Phone: " + getValueOrNA(order.getPhone())).setFontSize(10));
-                document.add(new Paragraph("\n").setFontSize(10));
-                log.debug("Added Header info successfully. BAOS size: {}", baos.size());
+                document.add(new Paragraph("I. THÔNG TIN CHUNG (ORDER INFORMATION)")
+                        .setFont(fontBold).setFontSize(11).setFontColor(PRIMARY_COLOR).setMarginBottom(5));
+
+                // Dùng bảng 4 cột để bố trí gọn hơn (Label - Value | Label - Value) nhưng vẫn giữ đủ data
+                // Nếu bạn muốn giữ y nguyên dạng danh sách dọc 2 cột như cũ thì đổi float[]{1, 2}
+                Table orderTable = new Table(UnitValue.createPercentArray(new float[]{1.5f, 3.5f, 1.5f, 3.5f})).useAllAvailableWidth();
+                orderTable.setFontSize(9);
+                orderTable.setMarginBottom(15);
+
+                // Row 1
+                addStyledRow(orderTable, "Order ID", order.getOrderId(), fontBold, fontRegular);
+                addStyledRow(orderTable, "Patient Name", getValueOrNA(order.getFullName()).toUpperCase(), fontBold, fontRegular);
+
+                // Row 2
+                addStyledRow(orderTable, "Gender", order.getGender() != null ? order.getGender().name() : "N/A", fontBold, fontRegular);
+                addStyledRow(orderTable, "Date of Birth", order.getDateOfBirth() != null ? order.getDateOfBirth().format(DATE_FORMATTER) : "N/A", fontBold, fontRegular);
+
+                // Row 3
+                addStyledRow(orderTable, "Phone Number", getValueOrNA(order.getPhone()), fontBold, fontRegular);
+                addStyledRow(orderTable, "Status", order.getStatus() != null ? order.getStatus().name() : "N/A", fontBold, fontRegular);
+
+                // Row 4
+                addStyledRow(orderTable, "Created By", getUserFullName(order.getCreatedBy()), fontBold, fontRegular);
+                addStyledRow(orderTable, "Created On", order.getCreatedAt() != null ? order.getCreatedAt().format(DATETIME_FORMATTER) : "N/A", fontBold, fontRegular);
+
+                // Row 5
+                addStyledRow(orderTable, "Run By", getUserFullName(order.getRunBy()), fontBold, fontRegular);
+                addStyledRow(orderTable, "Run On", order.getRunAt() != null ? order.getRunAt().format(DATETIME_FORMATTER) : "N/A", fontBold, fontRegular);
+
+                document.add(orderTable);
             } catch (Exception e) {
-                log.error("Error adding Header info: {}", e.getMessage(), e);
+                log.error("Error adding Table 1", e);
                 throw e;
             }
 
-            // --- Bảng 1: Thông tin Test Order ---
+            // 5. BẢNG 2: KẾT QUẢ XÉT NGHIỆM (Format lại: Header màu, Zebra stripe, Highlight bất thường)
             try {
-                document.add(new Paragraph("Order Information").setFont(fontBold).setFontSize(12).setMarginBottom(5));
-                Table orderInfoTable = new Table(UnitValue.createPercentArray(new float[]{1, 2})).useAllAvailableWidth();
-                orderInfoTable.setFontSize(9);
+                document.add(new Paragraph("II. KẾT QUẢ (TEST RESULTS)")
+                        .setFont(fontBold).setFontSize(11).setFontColor(PRIMARY_COLOR).setMarginBottom(5));
 
-                addRow(orderInfoTable, "Order ID", order.getOrderId(), fontRegular, fontBold);
-                addRow(orderInfoTable, "Patient Name", order.getFullName(), fontRegular, fontBold);
-                addRow(orderInfoTable, "Gender", order.getGender() != null ? order.getGender().name() : "N/A", fontRegular, fontBold);
-                addRow(orderInfoTable, "Date of Birth", order.getDateOfBirth() != null ? order.getDateOfBirth().format(DATE_FORMATTER) : "N/A", fontRegular, fontBold);
-                addRow(orderInfoTable, "Phone Number", order.getPhone(), fontRegular, fontBold);
-                addRow(orderInfoTable, "Status", order.getStatus() != null ? order.getStatus().name() : "N/A", fontRegular, fontBold);
-                addRow(orderInfoTable, "Created By", getUserFullName(order.getCreatedBy()), fontRegular, fontBold);
-                addRow(orderInfoTable, "Created On", order.getCreatedAt() != null ? order.getCreatedAt().format(DATETIME_FORMATTER) : "N/A", fontRegular, fontBold);
-                addRow(orderInfoTable, "Run By", getUserFullName(order.getRunBy()), fontRegular, fontBold);
-                addRow(orderInfoTable, "Run On", order.getRunAt() != null ? order.getRunAt().format(DATETIME_FORMATTER) : "N/A", fontRegular, fontBold);
-
-                document.add(orderInfoTable);
-                log.debug("Added Table 1 successfully. BAOS size: {}", baos.size());
-            } catch (Exception e) {
-                log.error("Error adding Table 1: {}", e.getMessage(), e);
-                throw e;
-            }
-
-            document.add(new Paragraph("\n").setFontSize(10));
-
-            // --- Bảng 2: Kết quả Xét nghiệm ---
-            try {
-                document.add(new Paragraph("Test Results").setFont(fontBold).setFontSize(12).setMarginBottom(5));
                 if (results != null && !results.isEmpty()) {
                     Table resultsTable = new Table(UnitValue.createPercentArray(new float[]{3, 1.5f, 1, 2, 1, 2})).useAllAvailableWidth();
                     resultsTable.setFontSize(9);
 
-                    resultsTable.addHeaderCell(createHeaderCell("Analyte Name", fontBold));
-                    resultsTable.addHeaderCell(createHeaderCell("Value", fontBold));
-                    resultsTable.addHeaderCell(createHeaderCell("Unit", fontBold));
-                    resultsTable.addHeaderCell(createHeaderCell("Reference Range", fontBold));
-                    resultsTable.addHeaderCell(createHeaderCell("Flag", fontBold));
-                    resultsTable.addHeaderCell(createHeaderCell("Measured At", fontBold));
+                    // Header với màu nền
+                    String[] headers = {"Analyte Name", "Value", "Unit", "Reference Range", "Flag", "Measured At"};
+                    for (String header : headers) {
+                        resultsTable.addHeaderCell(new Cell().add(new Paragraph(header))
+                                .setFont(fontBold)
+                                .setBackgroundColor(HEADER_BG_COLOR)
+                                .setTextAlignment(TextAlignment.CENTER)
+                                .setPadding(4));
+                    }
 
+                    boolean alternate = false;
                     for (TestResult result : results) {
-                        resultsTable.addCell(createCell(result.getAnalyteName(), false, fontRegular, fontBold));
-                        resultsTable.addCell(createCell(result.getValueText(), false, fontRegular, fontBold));
-                        resultsTable.addCell(createCell(result.getUnit(), false, fontRegular, fontBold));
-                        resultsTable.addCell(createCell(result.getReferenceRange(), false, fontRegular, fontBold));
-                        resultsTable.addCell(createCell(result.getAbnormalFlag() != null ? result.getAbnormalFlag().name() : null, false, fontRegular, fontBold));
-                        resultsTable.addCell(createCell(result.getMeasuredAt() != null ? result.getMeasuredAt().format(DATETIME_FORMATTER) : null, false, fontRegular, fontBold));
+                        Color rowColor = alternate ? new DeviceRgb(250, 250, 250) : ColorConstants.WHITE;
+
+                        // Kiểm tra bất thường để tô màu đỏ
+                        boolean isAbnormal = result.getAbnormalFlag() != null && result.getAbnormalFlag() != AbnormalFlag.N;
+                        Color textColor = isAbnormal ? ALERT_COLOR : ColorConstants.BLACK;
+                        PdfFont textFont = isAbnormal ? fontBold : fontRegular;
+
+                        // Add cells
+                        addResultCell(resultsTable, result.getAnalyteName(), TextAlignment.LEFT, rowColor, fontRegular, ColorConstants.BLACK);
+                        addResultCell(resultsTable, result.getValueText(), TextAlignment.CENTER, rowColor, textFont, textColor);
+                        addResultCell(resultsTable, result.getUnit(), TextAlignment.CENTER, rowColor, fontRegular, ColorConstants.BLACK);
+                        addResultCell(resultsTable, result.getReferenceRange(), TextAlignment.CENTER, rowColor, fontRegular, ColorConstants.BLACK);
+
+                        String flag = result.getAbnormalFlag() != null ? result.getAbnormalFlag().name() : "";
+                        addResultCell(resultsTable, flag, TextAlignment.CENTER, rowColor, fontBold, textColor);
+
+                        String time = result.getMeasuredAt() != null ? result.getMeasuredAt().format(DATETIME_FORMATTER) : "";
+                        addResultCell(resultsTable, time, TextAlignment.RIGHT, rowColor, fontRegular, ColorConstants.BLACK);
+
+                        alternate = !alternate;
                     }
                     document.add(resultsTable);
-                    log.debug("Added Table 2 successfully with {} results. BAOS size: {}", results.size(), baos.size());
                 } else {
-                    document.add(new Paragraph("No test results available.").setFontSize(10));
-                    log.debug("Added 'No results' message. BAOS size: {}", baos.size());
+                    document.add(new Paragraph("No test results available.").setFontSize(10).setItalic());
                 }
             } catch (Exception e) {
-                log.error("Error adding Table 2: {}", e.getMessage(), e);
+                log.error("Error adding Table 2", e);
                 throw e;
             }
 
-            document.add(new Paragraph("\n").setFontSize(10));
-
-            // --- SỬA 3: CẬP NHẬT LOGIC IN COMMENT ĐỂ DÙNG DTO ---
+            // 6. COMMENTS (Format khung viền)
             try {
-                document.add(new Paragraph("Comments").setFont(fontBold).setFontSize(12).setMarginBottom(5));
+                document.add(new Paragraph("\nIII. GHI CHÚ (COMMENTS)")
+                        .setFont(fontBold).setFontSize(11).setFontColor(PRIMARY_COLOR).setMarginBottom(5));
+
                 if (comments != null && !comments.isEmpty()) {
+                    Div commentContainer = new Div()
+                            .setBorder(new SolidBorder(ColorConstants.LIGHT_GRAY, 0.5f))
+                            .setPadding(5)
+                            .setBackgroundColor(new DeviceRgb(252, 252, 252));
 
-                    // Gọi hàm helper đệ quy để in
-                    addCommentsToDocument(document, comments, 0, fontRegular, fontBold);
-
-                    log.debug("Added Comments successfully with {} top-level comments. BAOS size: {}", comments.size(), baos.size());
+                    addCommentsToContainer(commentContainer, comments, 0, fontRegular, fontBold);
+                    document.add(commentContainer);
                 } else {
-                    document.add(new Paragraph("No comments found.").setFontSize(10));
-                    log.debug("Added 'No comments' message. BAOS size: {}", baos.size());
+                    document.add(new Paragraph("No comments found.").setFontSize(10).setItalic());
                 }
             } catch (Exception e) {
-                log.error("Error adding Comments: {}", e.getMessage(), e);
+                log.error("Error adding Comments", e);
                 throw e;
             }
 
-            log.info("All content added successfully. Before closing document. BAOS size: {}", baos.size());
+            // 7. CHỮ KÝ (Không điền tên sẵn)
+            addSignatureSection(document, fontBold);
 
-        } catch (IOException e) {
-            log.error("IO Error during PDF generation for order {}: {}", order.getOrderId(), e.getMessage(), e);
-            throw new RuntimeException("IO Error during PDF generation", e);
         } catch (Exception e) {
-            log.error("General Error during PDF generation for order {}: {}", order.getOrderId(), e.getMessage(), e);
-            throw new RuntimeException("General Error during PDF generation", e);
+            log.error("Error generating PDF", e);
+            throw new RuntimeException("Error generating PDF", e);
         }
 
-        finalBytes = baos.toByteArray();
-        log.info("PDF generation process completed for order {}. Final byte array size: {} bytes", order.getOrderId(), finalBytes.length);
-        return finalBytes;
+        return baos.toByteArray();
     }
 
-    // --- SỬA 4: HÀM ĐỆ QUY MỚI ĐỂ IN COMMENT VÀ REPLIES ---
-    private void addCommentsToDocument(Document document, List<CommentOrderResponse> comments, int level, PdfFont fontRegular, PdfFont fontBold) {
-        if (comments == null || comments.isEmpty()) {
-            return;
-        }
+    // --- HELPER METHODS ---
 
-        float indent = level * 20f; // Thụt lề 20f cho mỗi cấp độ reply
+    private void addClinicHeader(Document document, PdfFont fontBold) {
+        Table headerTable = new Table(UnitValue.createPercentArray(new float[]{1, 4})).useAllAvailableWidth();
+        headerTable.setBorder(Border.NO_BORDER);
+
+        // Logo giả lập (Màu nền xanh, chữ trắng)
+        Cell logoCell = new Cell().add(new Paragraph("LMS")
+                .setFont(fontBold).setFontSize(24).setFontColor(ColorConstants.WHITE)
+                .setTextAlignment(TextAlignment.CENTER));
+        logoCell.setBackgroundColor(PRIMARY_COLOR)
+                .setVerticalAlignment(VerticalAlignment.MIDDLE)
+                .setBorder(Border.NO_BORDER)
+                .setHeight(50);
+        headerTable.addCell(logoCell);
+
+        // Thông tin phòng khám
+        Paragraph info = new Paragraph()
+                .add(new Text("HỆ THỐNG QUẢN LÝ XÉT NGHIỆM\n").setFont(fontBold).setFontSize(12).setFontColor(PRIMARY_COLOR))
+                .add(new Text("Địa chỉ: 12 Nguyễn Văn Bảo, Phường 4, Gò Vấp, TP.HCM\n").setFontSize(9))
+                .add(new Text("Hotline: 1900 1234").setFontSize(9));
+
+        Cell infoCell = new Cell().add(info)
+                .setVerticalAlignment(VerticalAlignment.MIDDLE)
+                .setBorder(Border.NO_BORDER)
+                .setPaddingLeft(10);
+        headerTable.addCell(infoCell);
+
+        document.add(headerTable);
+    }
+
+    // Helper add row cho bảng thông tin Order (Có border mờ hoặc không border tùy ý, ở đây dùng border mỏng)
+    private void addStyledRow(Table table, String label, String value, PdfFont fontLabel, PdfFont fontValue) {
+        table.addCell(new Cell().add(new Paragraph(label).setFont(fontLabel))
+                .setBackgroundColor(new DeviceRgb(248, 248, 248)) // Nền nhẹ cho nhãn
+                .setPadding(3).setBorder(new SolidBorder(ColorConstants.LIGHT_GRAY, 0.5f)));
+
+        table.addCell(new Cell().add(new Paragraph(value).setFont(fontValue))
+                .setPadding(3).setBorder(new SolidBorder(ColorConstants.LIGHT_GRAY, 0.5f)));
+    }
+
+    // Helper add cell cho bảng kết quả
+    private void addResultCell(Table table, String text, TextAlignment align, Color bgColor, PdfFont font, Color textColor) {
+        table.addCell(new Cell().add(new Paragraph(getValueOrNA(text)).setFont(font).setFontColor(textColor))
+                .setBackgroundColor(bgColor)
+                .setTextAlignment(align)
+                .setPadding(4)
+                .setVerticalAlignment(VerticalAlignment.MIDDLE));
+    }
+
+    // Hàm đệ quy in comment vào container (Div) thay vì in trực tiếp ra Document để đóng khung
+    private void addCommentsToContainer(Div container, List<CommentOrderResponse> comments, int level, PdfFont fontRegular, PdfFont fontBold) {
+        if (comments == null || comments.isEmpty()) return;
+
+        // Cấu hình thụt lề
+        float levelIndent = level * 20f; // Thụt đầu dòng theo cấp độ cha/con
+        float bulletWidth = 15f;         // Khoảng cách dành riêng cho icon đầu dòng (để tạo hiệu ứng treo)
 
         for (CommentOrderResponse comment : comments) {
-            String authorName = "N/A";
-            if (comment.getAuthor() != null) {
-                authorName = getValueOrNA(comment.getAuthor().getFullName());
-            }
+            String authorName = (comment.getAuthor() != null) ? getValueOrNA(comment.getAuthor().getFullName()) : "N/A";
+            String time = (comment.getCreatedAt() != null) ? comment.getCreatedAt().format(DATETIME_FORMATTER) : "";
 
-            Paragraph commentPara = new Paragraph()
-                    .setFont(fontRegular)
-                    .setMarginLeft(indent) // Áp dụng thụt lề
-                    .add((comment.getCreatedAt() != null ? comment.getCreatedAt().format(DATETIME_FORMATTER) : "[No Date]"))
-                    .add(" - [")
-                    .add(new Paragraph(authorName).setFont(fontBold).setBold()) // In đậm tên
-                    .add("]: ")
-                    .add(getValueOrNA(comment.getContent()))
+            // LOGIC HANGING INDENT:
+            // setMarginLeft(X): Đẩy toàn bộ đoạn văn sang phải X.
+            // setFirstLineIndent(-Y): Kéo riêng dòng đầu tiên (chứa icon) lùi lại Y.
+            // Kết quả: Icon nằm bên trái, toàn bộ khối văn bản (tên + nội dung) thẳng hàng bên phải.
+            Paragraph p = new Paragraph()
+                    .setMarginLeft(levelIndent + bulletWidth)
+                    .setFirstLineIndent(-bulletWidth)
+                    .setMarginBottom(4)
                     .setFontSize(9)
-                    .setMarginBottom(3);
+                    .setFont(fontRegular);
 
-            // In thông tin target (nếu là comment về kết quả)
+            // 1. Icon đầu dòng (Prefix)
+            String prefixSymbol = (level == 0) ? "• " : "> ";
+            Text prefix = new Text(prefixSymbol)
+                    .setFont(fontRegular)
+                    .setFontColor(ColorConstants.GRAY) // Màu xám nhạt để không rối mắt
+                    .setFontSize(level == 0 ? 10 : 12); // Reply icon to hơn một chút cho rõ
+
+            p.add(prefix);
+
+            // 2. Tên người viết (Màu xanh thương hiệu)
+            p.add(new Text(authorName).setFont(fontBold).setFontColor(PRIMARY_COLOR));
+
+            // 3. Thời gian (Nhỏ, xám)
+            p.add(new Text(" [" + time + "]: ").setFontSize(8).setFontColor(ColorConstants.GRAY));
+
+            // 4. Nội dung comment (Màu đen mặc định)
+            p.add(new Text(getValueOrNA(comment.getContent())).setFont(fontRegular));
+
+            // 5. Thông tin tham chiếu (nếu có)
             if (comment.getTargetInfo() != null && comment.getTargetInfo().getTargetType() == fit.test_order_service.enums.CommentTargetType.RESULT) {
-                Paragraph targetPara = new Paragraph(
-                        String.format("(Về kết quả: %s - %s)",
-                                getValueOrNA(comment.getTargetInfo().getTestName()),
-                                getValueOrNA(comment.getTargetInfo().getAnalyteName()))
-                )
-                        .setFont(fontRegular)
-                        .setFontSize(8)
-                        .setItalic()
-                        .setMarginLeft(indent + 10f) // Thụt lề thêm
-                        .setMarginBottom(3);
-                document.add(targetPara);
+                p.add(new Text(String.format(" (Ref: %s)", comment.getTargetInfo().getAnalyteName()))
+                        .setFontSize(8).setItalic().setFontColor(ColorConstants.GRAY));
             }
 
-            document.add(commentPara);
+            container.add(p);
 
-            // Gọi đệ quy cho replies
-            addCommentsToDocument(document, comment.getReplies(), level + 1, fontRegular, fontBold);
+            // Đệ quy cho comment con
+            addCommentsToContainer(container, comment.getReplies(), level + 1, fontRegular, fontBold);
         }
     }
 
+    private void addSignatureSection(Document document, PdfFont fontBold) {
+        document.add(new Paragraph("\n\n"));
+        Table signTable = new Table(UnitValue.createPercentArray(new float[]{1, 1})).useAllAvailableWidth();
+        signTable.setBorder(Border.NO_BORDER);
 
-    // --- Helper Methods (Không thay đổi) ---
+        // Bên trái để trống
+        signTable.addCell(new Cell().setBorder(Border.NO_BORDER));
 
-    private Cell createCell(String content, boolean isBold, PdfFont fontRegular, PdfFont fontBold) {
-        Paragraph paragraph = new Paragraph(getValueOrNA(content));
-        if (isBold) {
-            paragraph.setFont(fontBold);
-        } else {
-            paragraph.setFont(fontRegular);
+        // Bên phải
+        Paragraph signBlock = new Paragraph()
+                .add(new Text("Ngày ..... tháng ..... năm .....\n").setItalic().setFontSize(10))
+                .add(new Text("KỸ THUẬT VIÊN / BÁC SĨ\n").setFont(fontBold).setFontSize(11))
+                .add(new Text("(Ký và ghi rõ họ tên)\n\n\n\n\n")) // Thêm dòng trống để ký
+                //.add(new Text("Nguyen Van A")) // <--- ĐÃ BỎ TÊN SẴN THEO YÊU CẦU
+                .setTextAlignment(TextAlignment.CENTER);
+
+        signTable.addCell(new Cell().add(signBlock).setBorder(Border.NO_BORDER));
+        document.add(signTable);
+    }
+
+    private PdfFont loadFont(String path, String fallback) {
+        try {
+            return PdfFontFactory.createFont(path, PdfEncodings.IDENTITY_H, PdfFontFactory.EmbeddingStrategy.PREFER_EMBEDDED);
+        } catch (IOException e) {
+            log.warn("Font error: {}. Using fallback.", e.getMessage());
+            try {
+                return PdfFontFactory.createFont(fallback);
+            } catch (IOException ex) {
+                throw new RuntimeException(ex);
+            }
         }
-        return new Cell().add(paragraph).setTextAlignment(TextAlignment.LEFT);
-    }
-
-    private Cell createHeaderCell(String content, PdfFont fontBold) {
-        Paragraph paragraph = new Paragraph(content).setFont(fontBold);
-        return new Cell().add(paragraph).setTextAlignment(TextAlignment.CENTER);
-    }
-
-    private void addRow(Table table, String key, String value, PdfFont fontRegular, PdfFont fontBold) {
-        table.addCell(createCell(key, true, fontRegular, fontBold));
-        table.addCell(createCell(value, false, fontRegular, fontBold));
     }
 
     private String getValueOrNA(String value) {
         return (value != null && !value.isBlank()) ? value : "N/A";
     }
 
-    // (Hàm này giờ chỉ dùng cho Bảng 1, không dùng cho comment nữa)
     private String getUserFullName(String userId) {
         if (userId == null || userId.isBlank() || "SYSTEM".equals(userId)) {
             return userId != null ? userId : "N/A";
         }
         try {
-            log.debug("Calling IAM service to get full name for user ID: {}", userId);
             ApiResponse<UserInternalResponse> response = iamFeignClient.getUserById(userId);
-            if (response != null && response.getData() != null && response.getData().fullName() != null) {
-                log.debug("Successfully retrieved full name for user ID {}: {}", userId, response.getData().fullName());
+            if (response != null && response.getData() != null) {
                 return response.getData().fullName();
-            } else {
-                log.warn("Could not retrieve full name for user ID: {}. Response or data was null or fullName was null.", userId);
-                return userId + " (Name not found)";
             }
         } catch (Exception e) {
-            log.error("Error calling IAM service for user ID {}: {}", userId, e.getMessage(), e);
-            return userId + " (Error retrieving name)";
+            // log.warn("Error getting user name", e); // Giảm log noise
         }
+        return userId;
     }
 }

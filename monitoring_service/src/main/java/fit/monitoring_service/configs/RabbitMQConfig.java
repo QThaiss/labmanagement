@@ -32,9 +32,21 @@ public class RabbitMQConfig {
     // Routing key lắng nghe sự kiện có kết quả xét nghiệm
     public static final String TEST_RESULT_ROUTING_KEY = "instrument.test_result";
 
+    public static final String EVENT_LOG_ROUTING_KEY = "instrument.event";
+
     // Lấy giá trị từ application.properties, nếu không có thì dùng mặc định "event_log_queue"
     @Value("${rabbitmq.queue.event-log:event_log_queue}")
     private String eventLogQueueName;
+
+    // Binding để queue 'event_log_queue' nhận được tin nhắn có key 'instrument.event'
+    @Bean
+    public Binding eventLogBinding(Queue eventLogQueue, TopicExchange instrumentExchange) {
+        return BindingBuilder
+                .bind(eventLogQueue)
+                .to(instrumentExchange)
+                .with(EVENT_LOG_ROUTING_KEY); // "instrument.event"
+    }
+    // ---------------------
 
     @Bean
     public TopicExchange instrumentExchange() {

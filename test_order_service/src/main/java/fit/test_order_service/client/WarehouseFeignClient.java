@@ -4,12 +4,13 @@ import fit.test_order_service.client.dtos.ReagentDeductionRequest;
 import fit.test_order_service.client.dtos.ReagentDeductionResponse;
 import fit.test_order_service.dtos.response.TestParameterResponse;
 import fit.test_order_service.dtos.response.ApiResponse;
+import fit.test_order_service.services.impl.FeignClientConfig;
 import org.springframework.cloud.openfeign.FeignClient;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 
-@FeignClient(name = "warehouse-service", url = "${application.config.warehouse-service-url}")
+@FeignClient(name = "warehouse-service", configuration = FeignClientConfig.class)
 public interface WarehouseFeignClient {
 
     @PostMapping("/api/v1/warehouse/reagents/deduct")

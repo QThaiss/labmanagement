@@ -519,13 +519,17 @@ public class UserServiceImpl implements UserService {
         // defaults
         int page = (q.page() == null || q.page() < 0) ? 0 : q.page();
         int size = (q.size() == null || q.size() <= 0) ? 20 : Math.min(q.size(), 100);
-        String sortBy = (q.sortBy() == null || q.sortBy().isBlank()) ? "fullName" : q.sortBy();
-        Sort.Direction dir = "desc".equalsIgnoreCase(q.sortDir()) ? Sort.Direction.DESC : Sort.Direction.ASC;
+        // 1. Sửa mặc định sortBy thành "createdAt"
+        String sortBy = (q.sortBy() == null || q.sortBy().isBlank()) ? "createdAt" : q.sortBy();
 
-        // Chỉ cho phép sort theo whitelist để tránh sort injection
+        // 2. Sửa mặc định Sort Direction thành DESC (để mới nhất lên đầu)
+        // Nếu q.sortDir() là "asc" thì dùng ASC, còn lại (null hoặc "desc") thì dùng DESC
+        Sort.Direction dir = "asc".equalsIgnoreCase(q.sortDir()) ? Sort.Direction.ASC : Sort.Direction.DESC;
+
+        // 3. Thêm "createdAt" vào whitelist switch case
         sortBy = switch (sortBy) {
-            case "email", "phone", "identifyNumber", "gender", "dateOfBirth", "fullName" -> sortBy;
-            default -> "fullName";
+            case "email", "phone", "identifyNumber", "gender", "dateOfBirth", "fullName", "createdAt" -> sortBy;
+            default -> "createdAt"; // Fallback về createdAt nếu field không hợp lệ
         };
 
         Pageable pageable = PageRequest.of(page, size, Sort.by(dir, sortBy));
